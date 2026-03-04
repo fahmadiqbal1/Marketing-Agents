@@ -51,6 +51,109 @@ Route::get('/health', function () {
 })->name('api.health');
 
 // ═══════════════════════════════════════════════════════════════════════
+// API AUTH (register / login / me) — token-based for external clients
+// ═══════════════════════════════════════════════════════════════════════
+
+// Register a new user and business, returns Sanctum API token
+Route::post('/auth/register', function (Request $request) {
+    $data = $request->validate([
+        'name'          => 'required|string|max:255',
+        'email'         => 'required|email|max:255|unique:users,email',
+        'password'      => 'required|string|min:8',
+        'business_name' => 'required|string|max:255',
+        'industry'      => 'nullable|string|max:100',
+    ]);
+
+    $baseSlug = \Illuminate\Support\Str::slug($data['business_name']);
+    $slug     = $baseSlug;
+    $counter  = 1;
+    while (\App\Models\Business::where('slug', $slug)->exists()) {
+        $slug = $baseSlug . '-' . $counter++;
+    }
+
+    return \Illuminate\Support\Facades\DB::transaction(function () use ($data, $slug) {
+        // Create user first so we have a real owner_id for the business
+        $user = \App\Models\User::create([
+            'name'        => $data['name'],
+            'email'       => $data['email'],
+            'password'    => \Illuminate\Support\Facades\Hash::make($data['password']),
+            'role'        => 'owner',
+            'business_id' => null,
+        ]);
+
+        $business = \App\Models\Business::create([
+            'name'     => $data['business_name'],
+            'slug'     => $slug,
+            'industry' => $data['industry'] ?? null,
+            'owner_id' => $user->id,
+        ]);
+
+        $user->update(['business_id' => $business->id]);
+
+        $token = $user->createToken('api')->plainTextToken;
+
+        return response()->json([
+            'success' => true,
+            'token'   => $token,
+            'user'    => [
+                'id'            => $user->id,
+                'email'         => $user->email,
+                'name'          => $user->name,
+                'role'          => $user->role,
+                'business_id'   => $business->id,
+                'business_name' => $business->name,
+            ],
+        ], 201);
+    });
+})->name('api.auth.register');
+
+// Login with email & password, returns Sanctum API token
+Route::post('/auth/login', function (Request $request) {
+    $data = $request->validate([
+        'email'    => 'required|email',
+        'password' => 'required|string',
+    ]);
+
+    $user = \App\Models\User::where('email', $data['email'])->first();
+
+    if (!$user || !\Illuminate\Support\Facades\Hash::check($data['password'], $user->password)) {
+        return response()->json(['success' => false, 'message' => 'Invalid credentials'], 401);
+    }
+
+    $business = \App\Models\Business::find($user->business_id);
+    $token    = $user->createToken('api')->plainTextToken;
+
+    return response()->json([
+        'success' => true,
+        'token'   => $token,
+        'user'    => [
+            'id'            => $user->id,
+            'email'         => $user->email,
+            'name'          => $user->name,
+            'role'          => $user->role,
+            'business_id'   => $user->business_id,
+            'business_name' => $business->name ?? '',
+        ],
+    ]);
+})->name('api.auth.login');
+
+// Return current user profile (requires valid Sanctum token)
+Route::middleware('auth:sanctum')->get('/auth/me', function (Request $request) {
+    $user     = $request->user();
+    $business = \App\Models\Business::find($user->business_id);
+
+    return response()->json([
+        'id'            => $user->id,
+        'email'         => $user->email,
+        'name'          => $user->name,
+        'role'          => $user->role,
+        'business_id'   => $user->business_id,
+        'business_name' => $business->name ?? '',
+        'business_slug' => $business->slug ?? '',
+    ]);
+})->name('api.auth.me');
+
+// ═══════════════════════════════════════════════════════════════════════
 // AUTHENTICATED API ROUTES
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -446,6 +549,66 @@ Route::middleware('auth:sanctum')->group(function () {
         $records = \App\Models\BillingRecord::where('business_id', $businessId)->orderByDesc('created_at')->take(50)->get();
         return response()->json(['success' => true, 'records' => $records]);
     })->name('api.billing.history');
+
+    // Tenant requests permission to use platform-owner's shared API keys
+    Route::post('/billing/request-credit', function (Request $request) {
+        $request->validate(['reason' => 'nullable|string|max:500']);
+
+        $user       = $request->user();
+        $businessId = $user->business_id;
+
+        if (!$businessId) {
+            return response()->json(['success' => false, 'message' => 'Business not found'], 404);
+        }
+
+        \App\Models\Business::where('id', $businessId)
+            ->update(['uses_platform_api_keys' => true]);
+
+        \App\Models\AuditLog::log(
+            \App\Models\AuditLog::EVENT_CREDIT_REQUESTED,
+            \App\Models\AuditLog::SEVERITY_WARNING,
+            $businessId,
+            (string) $user->id,
+            ['reason' => $request->input('reason', '')]
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Credit access request submitted. An admin will review shortly.',
+        ]);
+    })->name('api.billing.request-credit');
+
+    // Admin approves a tenant's credit request
+    Route::post('/billing/approve-credit/{businessId}', function (Request $request, int $businessId) {
+        $user = $request->user();
+        if ($user->role !== 'admin') {
+            return response()->json(['success' => false, 'message' => 'Admin only'], 403);
+        }
+
+        \App\Models\Business::where('id', $businessId)
+            ->update(['credit_approved' => true]);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Credit approved for business {$businessId}",
+        ]);
+    })->name('api.billing.approve-credit');
+
+    // Admin revokes a tenant's credit access
+    Route::post('/billing/revoke-credit/{businessId}', function (Request $request, int $businessId) {
+        $user = $request->user();
+        if ($user->role !== 'admin') {
+            return response()->json(['success' => false, 'message' => 'Admin only'], 403);
+        }
+
+        \App\Models\Business::where('id', $businessId)
+            ->update(['credit_approved' => false, 'uses_platform_api_keys' => false]);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Credit revoked for business {$businessId}",
+        ]);
+    })->name('api.billing.revoke-credit');
 
     Route::get('/plans', function () {
         $plans = \App\Models\SubscriptionPlan::where('is_active', true)->get(['id', 'name', 'price_monthly', 'price_yearly', 'limits', 'features']);
