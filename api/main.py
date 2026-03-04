@@ -19,7 +19,8 @@ Endpoints:
   # Multi-tenant / SaaS
   POST /api/auth/register       — Register new user + business
   POST /api/auth/login          — Login and get JWT token
-  GET  /api/auth/me             — Get current user profile
+  POST /api/auth/logout         — Logout and revoke current JWT token
+  GET  /api/auth/me             — Get current user profile + connected platforms & AI providers
   POST /api/business/setup      — Create a new business (onboarding)
   GET  /api/business/{id}/profile — Get business profile
   PUT  /api/business/{id}/profile — Update business profile
@@ -30,6 +31,17 @@ Endpoints:
   GET  /api/platforms/fields/{p}     — Get required fields for a platform
   POST /api/telegram/configure       — Configure Telegram bot
   POST /api/telegram/test            — Test Telegram bot token
+
+  # AI Model Management
+  GET  /api/ai-models                — List configured AI providers
+  POST /api/ai-models                — Add/update AI provider (openai, gemini, anthropic, ollama, etc.)
+  POST /api/ai-models/{p}/test       — Test AI provider connection
+  DELETE /api/ai-models/{p}          — Remove AI provider
+
+  # Multi-Business
+  GET  /api/businesses               — List all businesses user can access
+  POST /api/businesses               — Create new business with agent cloning
+  POST /api/auth/switch-business     — Switch active business context
 
 Runs on port 8001 (Laravel on 8000).
 """
@@ -78,6 +90,11 @@ if not _settings.encryption_key:
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 72
 _bearer_scheme = HTTPBearer(auto_error=False)
+
+# ── Token Blocklist (for logout) ──────────────────────────────────────────────
+# In-memory set of revoked JWT IDs.  Tokens are short-lived (72 h) so
+# the set is periodically pruned to avoid unbounded growth.
+_revoked_tokens: dict[str, float] = {}  # jti → expiry timestamp
 
 # ── App Setup ─────────────────────────────────────────────────────────────────
 
@@ -407,6 +424,7 @@ def _create_jwt(user_id: int, business_id: int, role: str) -> str:
         "sub": str(user_id),
         "bid": business_id,
         "role": role,
+        "jti": secrets.token_hex(16),
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRY_HOURS),
         "iat": datetime.utcnow(),
     }
@@ -415,11 +433,18 @@ def _create_jwt(user_id: int, business_id: int, role: str) -> str:
 
 def _decode_jwt(token: str) -> dict:
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Check if token has been revoked (logout)
+    jti = payload.get("jti")
+    if jti and jti in _revoked_tokens:
+        raise HTTPException(status_code=401, detail="Token has been revoked")
+
+    return payload
 
 
 async def get_current_user(
@@ -1312,6 +1337,15 @@ async def register(req: RegisterRequest):
         await session.refresh(user)
         await session.refresh(business)
 
+        # Create user → business link in junction table
+        try:
+            from memory.models import UserBusinessLink
+            link = UserBusinessLink(user_id=user.id, business_id=business.id, role="owner")
+            session.add(link)
+            await session.commit()
+        except Exception:
+            pass  # Table may not exist yet
+
         token = _create_jwt(user.id, business.id, user.role.value)
         return AuthResponse(
             success=True,
@@ -1386,6 +1420,38 @@ async def get_me(user: dict = Depends(get_current_user)):
             select(Business).where(Business.id == db_user.business_id)
         )).scalar_one_or_none()
 
+        # Fetch connected platforms summary
+        from sqlalchemy import text
+        platform_rows = await session.execute(
+            text(
+                "SELECT platform, status FROM platform_connections "
+                "WHERE business_id = :bid AND status = 'active'"
+            ),
+            {"bid": db_user.business_id},
+        )
+        connected_platforms = [
+            {"platform": r.platform, "status": r.status}
+            for r in platform_rows.fetchall()
+        ]
+
+        # Fetch configured AI providers summary
+        ai_rows = await session.execute(
+            text(
+                "SELECT provider, model_name, status, is_active "
+                "FROM ai_provider_configs WHERE business_id = :bid ORDER BY provider"
+            ),
+            {"bid": db_user.business_id},
+        )
+        ai_providers = [
+            {
+                "provider": r.provider,
+                "model_name": r.model_name,
+                "status": r.status,
+                "is_active": bool(r.is_active),
+            }
+            for r in ai_rows.fetchall()
+        ]
+
         return {
             "id": db_user.id,
             "email": db_user.email,
@@ -1394,7 +1460,32 @@ async def get_me(user: dict = Depends(get_current_user)):
             "business_id": db_user.business_id,
             "business_name": business.name if business else "",
             "business_slug": business.slug if business else "",
+            "connected_platforms": connected_platforms,
+            "ai_providers": ai_providers,
         }
+
+
+@app.post("/api/auth/logout")
+async def logout(
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+):
+    """Logout by revoking the current JWT token."""
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    payload = _decode_jwt(credentials.credentials)
+    jti = payload.get("jti")
+    if jti:
+        exp = payload.get("exp", 0)
+        _revoked_tokens[jti] = exp
+
+        # Prune expired entries to prevent unbounded growth
+        now = datetime.utcnow().timestamp()
+        expired_jtis = [k for k, v in _revoked_tokens.items() if v < now]
+        for k in expired_jtis:
+            _revoked_tokens.pop(k, None)
+
+    return {"success": True, "message": "Logged out successfully"}
 
 
 # ── Business Setup Endpoints ─────────────────────────────────────────────────
@@ -2728,6 +2819,7 @@ class AiModelRequest(BaseModel):
     provider: str
     api_key: str
     model_name: str | None = None
+    base_url: str | None = None  # For ollama / openai_compatible endpoints
 
 
 @app.get("/api/ai-models")
@@ -2739,7 +2831,7 @@ async def list_ai_models(user: dict = Depends(get_current_user)):
     async with get_session_factory()() as session:
         rows = await session.execute(
             text(
-                "SELECT id, provider, api_key_encrypted, model_name, is_active, status, "
+                "SELECT id, provider, api_key_encrypted, model_name, base_url, is_active, status, "
                 "last_checked_at, last_error, created_at "
                 "FROM ai_provider_configs WHERE business_id = :bid ORDER BY provider"
             ),
@@ -2760,6 +2852,7 @@ async def list_ai_models(user: dict = Depends(get_current_user)):
                 "provider": r.provider,
                 "masked_key": masked,
                 "model_name": r.model_name,
+                "base_url": r.base_url if hasattr(r, "base_url") else None,
                 "is_active": bool(r.is_active),
                 "status": r.status or "pending",
                 "last_checked_at": str(r.last_checked_at) if r.last_checked_at else None,
@@ -2775,7 +2868,7 @@ async def save_ai_model(req: AiModelRequest, user: dict = Depends(get_current_us
     from security.encryption import encrypt
     from memory.database import get_session_factory
 
-    valid_providers = {"openai", "google_gemini", "anthropic", "mistral", "deepseek", "groq"}
+    valid_providers = {"openai", "google_gemini", "anthropic", "mistral", "deepseek", "groq", "ollama", "openai_compatible"}
     if req.provider not in valid_providers:
         raise HTTPException(status_code=400, detail=f"Invalid provider. Must be one of: {', '.join(sorted(valid_providers))}")
 
@@ -2794,22 +2887,22 @@ async def save_ai_model(req: AiModelRequest, user: dict = Depends(get_current_us
             await session.execute(
                 text(
                     "UPDATE ai_provider_configs SET api_key_encrypted = :key, model_name = :model, "
-                    "status = 'pending', updated_at = NOW() WHERE id = :id"
+                    "base_url = :base_url, status = 'pending', updated_at = NOW() WHERE id = :id"
                 ),
-                {"key": encrypted_key, "model": req.model_name, "id": row.id},
+                {"key": encrypted_key, "model": req.model_name, "base_url": req.base_url, "id": row.id},
             )
         else:
             await session.execute(
                 text(
-                    "INSERT INTO ai_provider_configs (business_id, provider, api_key_encrypted, model_name, status, created_at) "
-                    "VALUES (:bid, :p, :key, :model, 'pending', NOW())"
+                    "INSERT INTO ai_provider_configs (business_id, provider, api_key_encrypted, model_name, base_url, status, created_at) "
+                    "VALUES (:bid, :p, :key, :model, :base_url, 'pending', NOW())"
                 ),
-                {"bid": bid, "p": req.provider, "key": encrypted_key, "model": req.model_name},
+                {"bid": bid, "p": req.provider, "key": encrypted_key, "model": req.model_name, "base_url": req.base_url},
             )
         await session.commit()
 
     # Test immediately
-    test_result = await _test_ai_provider(req.provider, req.api_key, req.model_name)
+    test_result = await _test_ai_provider(req.provider, req.api_key, req.model_name, req.base_url)
 
     async with get_session_factory()() as session:
         await session.execute(
@@ -2842,7 +2935,7 @@ async def test_ai_model_endpoint(provider: str, user: dict = Depends(get_current
 
     async with get_session_factory()() as session:
         row = await session.execute(
-            text("SELECT api_key_encrypted, model_name FROM ai_provider_configs WHERE business_id = :bid AND provider = :p"),
+            text("SELECT api_key_encrypted, model_name, base_url FROM ai_provider_configs WHERE business_id = :bid AND provider = :p"),
             {"bid": user["business_id"], "p": provider},
         )
         config = row.fetchone()
@@ -2851,8 +2944,9 @@ async def test_ai_model_endpoint(provider: str, user: dict = Depends(get_current
 
         api_key = decrypt(config.api_key_encrypted)
         model_name = config.model_name
+        provider_base_url = config.base_url if hasattr(config, "base_url") else None
 
-    result = await _test_ai_provider(provider, api_key, model_name)
+    result = await _test_ai_provider(provider, api_key, model_name, provider_base_url)
 
     async with get_session_factory()() as session:
         await session.execute(
@@ -2888,7 +2982,7 @@ async def delete_ai_model(provider: str, user: dict = Depends(get_current_user))
     return {"success": True, "message": f"{provider} configuration removed"}
 
 
-async def _test_ai_provider(provider: str, api_key: str, model_name: str | None = None) -> dict:
+async def _test_ai_provider(provider: str, api_key: str, model_name: str | None = None, base_url: str | None = None) -> dict:
     """Test an AI provider API key by sending a minimal request."""
     import httpx
 
@@ -2975,6 +3069,35 @@ async def _test_ai_provider(provider: str, api_key: str, model_name: str | None 
             latency = round(time.time() - start, 2)
             if resp.status_code == 200:
                 return {"success": True, "message": f"Groq ({model}) responding — {latency}s latency", "latency": latency}
+            else:
+                return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+
+        elif provider == "ollama":
+            base = base_url or "http://localhost:11434"
+            model = model_name or "llama3"
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    f"{base.rstrip('/')}/api/generate",
+                    json={"model": model, "prompt": "Say hello in 3 words", "stream": False},
+                )
+            latency = round(time.time() - start, 2)
+            if resp.status_code == 200:
+                return {"success": True, "message": f"Ollama ({model}) responding at {base} — {latency}s latency", "latency": latency}
+            else:
+                return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+
+        elif provider == "openai_compatible":
+            base = base_url or "http://localhost:8080"
+            model = model_name or "default"
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    f"{base.rstrip('/')}/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
+                    json={"model": model, "messages": [{"role": "user", "content": "Say hello in 3 words"}], "max_tokens": 10},
+                )
+            latency = round(time.time() - start, 2)
+            if resp.status_code == 200:
+                return {"success": True, "message": f"Custom endpoint ({model}) at {base} — {latency}s latency", "latency": latency}
             else:
                 return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
 
@@ -3214,48 +3337,79 @@ async def _store_knowledge_chunks(business_id: int, source_name: str, chunks: li
 
 @app.get("/api/businesses")
 async def list_businesses(user: dict = Depends(get_current_user)):
-    """List all businesses the user has access to."""
+    """List all businesses the user has access to (via user_business_links or direct ownership)."""
     from sqlalchemy import text
     from memory.database import get_session_factory
 
     async with get_session_factory()() as session:
-        # For now, users belong to one business, but we return it for the switcher UI
-        rows = await session.execute(
-            text(
-                "SELECT b.id, b.name, b.slug, b.industry, b.subscription_plan, b.is_active "
-                "FROM businesses b JOIN users u ON u.business_id = b.id "
-                "WHERE u.id = :uid ORDER BY b.name"
-            ),
-            {"uid": user["user_id"]},
-        )
-        businesses = []
-        for r in rows.fetchall():
-            businesses.append({
-                "id": r.id,
-                "name": r.name,
-                "slug": r.slug,
-                "industry": r.industry,
-                "plan": r.subscription_plan,
-                "is_active": bool(r.is_active),
-            })
+        # Ensure user_business_links table exists (graceful fallback)
+        try:
+            rows = await session.execute(
+                text(
+                    "SELECT b.id, b.name, b.slug, b.industry, b.subscription_plan, b.is_active, "
+                    "ubl.role AS link_role "
+                    "FROM user_business_links ubl "
+                    "JOIN businesses b ON b.id = ubl.business_id "
+                    "WHERE ubl.user_id = :uid ORDER BY b.name"
+                ),
+                {"uid": user["user_id"]},
+            )
+            businesses = []
+            for r in rows.fetchall():
+                businesses.append({
+                    "id": r.id,
+                    "name": r.name,
+                    "slug": r.slug,
+                    "industry": r.industry,
+                    "plan": r.subscription_plan,
+                    "is_active": bool(r.is_active),
+                    "role": r.link_role,
+                })
+        except Exception:
+            # Fallback: use the direct user → business link
+            rows = await session.execute(
+                text(
+                    "SELECT b.id, b.name, b.slug, b.industry, b.subscription_plan, b.is_active "
+                    "FROM businesses b JOIN users u ON u.business_id = b.id "
+                    "WHERE u.id = :uid ORDER BY b.name"
+                ),
+                {"uid": user["user_id"]},
+            )
+            businesses = []
+            for r in rows.fetchall():
+                businesses.append({
+                    "id": r.id,
+                    "name": r.name,
+                    "slug": r.slug,
+                    "industry": r.industry,
+                    "plan": r.subscription_plan,
+                    "is_active": bool(r.is_active),
+                })
 
     return {"success": True, "businesses": businesses, "current_business_id": user["business_id"]}
 
 
+class CreateBusinessRequest(BaseModel):
+    name: str
+    industry: str | None = None
+    selected_platforms: list[str] = []  # Platforms to auto-clone agents for
+
+    @field_validator("name")
+    @classmethod
+    def _name_check(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 200:
+            raise ValueError("Business name is required and must be 200 characters or fewer")
+        return v
+
+
 @app.post("/api/businesses")
-async def create_business(request: Request, user: dict = Depends(get_current_user)):
-    """Create a new business (multi-tenant expansion)."""
+async def create_business(req: CreateBusinessRequest, user: dict = Depends(get_current_user)):
+    """Create a new business and link to current user. Auto-clones trained agents."""
     from sqlalchemy import text
     from memory.database import get_session_factory
 
-    body = await request.json()
-    name = body.get("name", "").strip()
-    industry = body.get("industry", "").strip()
-
-    if not name:
-        raise HTTPException(status_code=400, detail="Business name is required")
-
-    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+    slug = re.sub(r'[^a-z0-9]+', '-', req.name.lower()).strip('-')
 
     async with get_session_factory()() as session:
         # Check slug uniqueness
@@ -3268,18 +3422,78 @@ async def create_business(request: Request, user: dict = Depends(get_current_use
                 "INSERT INTO businesses (name, slug, industry, subscription_plan, is_active, created_at) "
                 "VALUES (:name, :slug, :industry, 'free', 1, NOW())"
             ),
-            {"name": name, "slug": slug, "industry": industry or None},
+            {"name": req.name, "slug": slug, "industry": req.industry or None},
         )
         new_id = result.lastrowid
 
-        # Link user to new business (for now, update their business_id)
-        await session.execute(
-            text("UPDATE users SET business_id = :bid WHERE id = :uid"),
-            {"bid": new_id, "uid": user["user_id"]},
-        )
+        # Link user → new business via junction table (do NOT overwrite active business)
+        try:
+            await session.execute(
+                text(
+                    "INSERT INTO user_business_links (user_id, business_id, role, created_at) "
+                    "VALUES (:uid, :bid, 'owner', NOW())"
+                ),
+                {"uid": user["user_id"], "bid": new_id},
+            )
+        except Exception:
+            pass  # Table may not exist yet in older installations
+
+        # Also ensure current business is linked
+        try:
+            await session.execute(
+                text(
+                    "INSERT IGNORE INTO user_business_links (user_id, business_id, role, created_at) "
+                    "VALUES (:uid, :bid, 'owner', NOW())"
+                ),
+                {"uid": user["user_id"], "bid": user["business_id"]},
+            )
+        except Exception:
+            pass
+
+        # Auto-clone trained platform agents from user's current business
+        source_bid = user["business_id"]
+        if req.selected_platforms:
+            platforms_list = ", ".join(f"'{p}'" for p in req.selected_platforms if p.isalpha())
+            if platforms_list:
+                try:
+                    agents = await session.execute(
+                        text(
+                            f"SELECT platform, system_prompt_override, agent_type, learning_profile, "
+                            f"performance_stats, trained_from_repos, skill_version "
+                            f"FROM platform_agents WHERE business_id = :bid AND platform IN ({platforms_list})"
+                        ),
+                        {"bid": source_bid},
+                    )
+                    for agent in agents.fetchall():
+                        await session.execute(
+                            text(
+                                "INSERT INTO platform_agents "
+                                "(business_id, platform, system_prompt_override, agent_type, learning_profile, "
+                                "performance_stats, trained_from_repos, skill_version, is_active, created_at) "
+                                "VALUES (:bid, :platform, :prompt, :atype, :learn, :perf, :repos, :skill, 1, NOW())"
+                            ),
+                            {
+                                "bid": new_id,
+                                "platform": agent.platform,
+                                "prompt": agent.system_prompt_override,
+                                "atype": agent.agent_type,
+                                "learn": agent.learning_profile,
+                                "perf": agent.performance_stats,
+                                "repos": agent.trained_from_repos,
+                                "skill": agent.skill_version,
+                            },
+                        )
+                except Exception as e:
+                    logger.warning(f"Agent cloning partial failure: {e}")
+
         await session.commit()
 
-    return {"success": True, "message": f"Business '{name}' created", "business_id": new_id}
+    return {
+        "success": True,
+        "message": f"Business '{req.name}' created",
+        "business_id": new_id,
+        "agents_cloned": len(req.selected_platforms),
+    }
 
 
 @app.post("/api/auth/switch-business")
@@ -3294,7 +3508,7 @@ async def switch_business(request: Request, user: dict = Depends(get_current_use
         raise HTTPException(status_code=400, detail="business_id required")
 
     async with get_session_factory()() as session:
-        # Verify user has access to this business
+        # Verify business exists and is active
         row = await session.execute(
             text("SELECT id FROM businesses WHERE id = :bid AND is_active = 1"),
             {"bid": target_bid},
@@ -3302,7 +3516,22 @@ async def switch_business(request: Request, user: dict = Depends(get_current_use
         if not row.fetchone():
             raise HTTPException(status_code=404, detail="Business not found")
 
-        # Update user's business_id
+        # Verify user has access to this business (via junction table or direct ownership)
+        try:
+            link = await session.execute(
+                text(
+                    "SELECT id FROM user_business_links WHERE user_id = :uid AND business_id = :bid"
+                ),
+                {"uid": user["user_id"], "bid": target_bid},
+            )
+            if not link.fetchone():
+                raise HTTPException(status_code=403, detail="Access denied — not linked to this business")
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # Junction table may not exist yet; allow the switch
+
+        # Update user's active business_id
         await session.execute(
             text("UPDATE users SET business_id = :bid WHERE id = :uid"),
             {"bid": target_bid, "uid": user["user_id"]},
@@ -3310,14 +3539,7 @@ async def switch_business(request: Request, user: dict = Depends(get_current_use
         await session.commit()
 
     # Issue new JWT with updated business_id
-    payload = {
-        "sub": str(user["user_id"]),
-        "bid": target_bid,
-        "role": user["role"],
-        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRY_HOURS),
-        "iat": datetime.utcnow(),
-    }
-    new_token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    new_token = _create_jwt(int(user["user_id"]), target_bid, user["role"])
 
     return {"success": True, "message": "Switched business", "token": new_token, "business_id": target_bid}
 

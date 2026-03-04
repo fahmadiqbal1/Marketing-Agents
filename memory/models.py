@@ -583,9 +583,10 @@ class AiProviderConfig(Base):
     business_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("businesses.id"), nullable=False, index=True
     )
-    provider: Mapped[str] = mapped_column(String(50))  # openai, google_gemini, anthropic, mistral, deepseek, groq
+    provider: Mapped[str] = mapped_column(String(50))  # openai, google_gemini, anthropic, mistral, deepseek, groq, ollama, openai_compatible
     api_key_encrypted: Mapped[str] = mapped_column(Text)
     model_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    base_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # For ollama / openai_compatible endpoints
     is_default_text: Mapped[bool] = mapped_column(Boolean, default=False)
     is_default_vision: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -712,3 +713,24 @@ class BotPersonality(Base):
     )
 
     business: Mapped["Business"] = relationship()
+
+
+class UserBusinessLink(Base):
+    """Junction table — links users to multiple businesses they can manage."""
+
+    __tablename__ = "user_business_links"
+    __table_args__ = (
+        UniqueConstraint("user_id", "business_id", name="uq_user_business"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=False, index=True
+    )
+    business_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("businesses.id"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(20), default="owner")  # owner, admin, viewer
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
