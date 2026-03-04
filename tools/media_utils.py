@@ -57,6 +57,12 @@ def resumes_path() -> Path:
     return p
 
 
+def project_dumps_path() -> Path:
+    p = _media_root() / "project_dumps"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def generate_filename(original_name: str, prefix: str = "") -> str:
     """Generate a unique filename preserving the original extension."""
     ext = Path(original_name).suffix or ".jpg"
