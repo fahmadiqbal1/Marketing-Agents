@@ -44,12 +44,14 @@ MAGIC_SIGNATURES: dict[bytes, list[str]] = {
 ALLOWED_PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif"}
 ALLOWED_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 ALLOWED_DOC_EXTS = {".pdf", ".doc", ".docx"}  # For resumes only
-ALL_ALLOWED_EXTS = ALLOWED_PHOTO_EXTS | ALLOWED_VIDEO_EXTS | ALLOWED_DOC_EXTS
+ALLOWED_TEXT_EXTS = {".txt"}              # For plain-text project/knowledge dumps
+ALL_ALLOWED_EXTS = ALLOWED_PHOTO_EXTS | ALLOWED_VIDEO_EXTS | ALLOWED_DOC_EXTS | ALLOWED_TEXT_EXTS
 
 # Size limits in bytes
 MAX_PHOTO_SIZE = 20 * 1024 * 1024       # 20 MB
 MAX_VIDEO_SIZE = 100 * 1024 * 1024      # 100 MB
 MAX_DOC_SIZE = 10 * 1024 * 1024         # 10 MB
+MAX_TXT_SIZE = 50 * 1024 * 1024         # 50 MB  (large project dumps)
 MIN_FILE_SIZE = 1024                     # 1 KB (reject empty/corrupt files)
 
 # Filename rules
@@ -127,6 +129,9 @@ def validate_file(
     elif ext in ALLOWED_VIDEO_EXTS:
         result.file_type = "video"
         max_size = MAX_VIDEO_SIZE
+    elif ext in ALLOWED_TEXT_EXTS:
+        result.file_type = "text"
+        max_size = MAX_TXT_SIZE
     else:
         result.file_type = "document"
         max_size = MAX_DOC_SIZE

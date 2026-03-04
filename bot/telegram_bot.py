@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from telegram import (
@@ -36,6 +37,7 @@ from config.settings import get_settings
 from tools.media_utils import (
     inbox_path,
     resumes_path,
+    project_dumps_path,
     generate_filename,
     get_image_metadata,
     get_video_metadata,
@@ -129,7 +131,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/analytics — Post performance summary\n"
         "/usage — AI token usage summary\n"
         "/status — Check system status\n"
+        "/compare — Gap analysis: Python original vs Laravel conversion\n"
         "/help — Show this message\n\n"
+        "📂 *Project dump upload:* Send a *.txt* file containing your original Python "
+        "source code and I will analyse it, summarise every module and feature, then "
+        "use /compare to show what is missing or different in the Laravel version.\n\n"
         "💬 You can also just type naturally — "
         "try \"create a post\" or \"show my stats\"!",
         parse_mode="Markdown",
@@ -1792,13 +1798,343 @@ async def job_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # =============================================================================
+# PROJECT DUMP HANDLING
+# =============================================================================
+
+# Maximum characters of raw dump text kept in memory for LLM context windows.
+# A 22 000-line file is typically ~700 000 chars; we keep the full text on disk
+# and send it to the AI in overlapping chunks to produce a coherent summary.
+_CHUNK_SIZE = 12_000   # chars per chunk  (~3 000 tokens)
+_CHUNK_OVERLAP = 1_000  # chars of overlap between consecutive chunks
+
+# When injecting the stored project summary into the assistant system prompt we
+# cap it to stay within the model's context window (~500 token budget for context).
+_MAX_PROJECT_CONTEXT_CHARS = 3_000
+
+
+async def _handle_project_dump(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    doc,
+    file_name: str,
+) -> None:
+    """Download a .txt project dump, analyse it with AI, and store the context.
+
+    The full raw text is saved to disk under media/project_dumps/.
+    A structured summary is stored in ``context.bot_data`` so every subsequent
+    handler can reference it when the user asks about discrepancies.
+    """
+    from security.file_guard import validate_file
+    from security.audit_log import audit, AuditEvent, Severity
+
+    await update.message.reply_text(
+        "📂 Project dump received! Downloading and reading the file…\n"
+        "This may take a moment for large files."
+    )
+
+    # ── Download ──────────────────────────────────────────────────────────
+    tg_file = await doc.get_file()
+    filename = generate_filename(file_name, prefix="dump")
+    local_path = project_dumps_path() / filename
+    await tg_file.download_to_drive(str(local_path))
+
+    # ── Security validation ───────────────────────────────────────────────
+    validation = validate_file(
+        file_path=str(local_path),
+        original_filename=filename,
+        allow_documents=True,
+    )
+    if not validation.is_safe:
+        local_path.unlink(missing_ok=True)
+        await audit(
+            event=AuditEvent.FILE_REJECTED,
+            severity=Severity.HIGH,
+            actor="telegram_bot",
+            details={"filename": filename, "issues": validation.issues},
+        )
+        await update.message.reply_text(
+            "⚠️ File rejected by security scan:\n"
+            + "\n".join(f"• {i}" for i in validation.issues)
+        )
+        return
+
+    await audit(
+        event=AuditEvent.FILE_UPLOAD,
+        severity=Severity.INFO,
+        actor="telegram_bot",
+        details={"filename": filename, "type": "project_dump", "size": validation.file_size},
+    )
+
+    # ── Read text ─────────────────────────────────────────────────────────
+    try:
+        raw_text = local_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not read file: {e}")
+        return
+
+    line_count = raw_text.count("\n") + 1
+    char_count = len(raw_text)
+    size_kb = round(validation.file_size / 1024, 1)
+
+    await update.message.reply_text(
+        f"✅ File read successfully!\n"
+        f"📄 *{filename}*\n"
+        f"• Lines: {line_count:,}\n"
+        f"• Characters: {char_count:,}\n"
+        f"• Size: {size_kb} KB\n\n"
+        "🧠 Analysing the project structure… (chunking large file)",
+        parse_mode="Markdown",
+    )
+
+    # ── AI analysis — chunked summarisation ──────────────────────────────
+    summary = await _summarise_project_dump(raw_text, update)
+
+    # ── Persist in bot_data for all future handlers ───────────────────────
+    context.bot_data["project_dump_path"] = str(local_path)
+    context.bot_data["project_dump_summary"] = summary
+    context.bot_data["project_dump_filename"] = filename
+
+    # ── Reply with the final structured summary ───────────────────────────
+    # Telegram messages are capped at 4 096 chars; split if needed.
+    header = (
+        f"📋 *Project Dump Analysis — {filename}*\n"
+        f"_{line_count:,} lines · {size_kb} KB_\n\n"
+    )
+    full_reply = header + summary
+
+    if len(full_reply) <= 4_000:
+        await update.message.reply_text(full_reply, parse_mode="Markdown")
+    else:
+        # Send in 4 000-char chunks
+        chunks = [full_reply[i : i + 4_000] for i in range(0, len(full_reply), 4_000)]
+        for idx, chunk in enumerate(chunks):
+            prefix = "" if idx == 0 else f"_(continued {idx + 1}/{len(chunks)})_\n\n"
+            await update.message.reply_text(prefix + chunk, parse_mode="Markdown")
+
+    await update.message.reply_text(
+        "✅ Project context loaded!\n\n"
+        "You can now:\n"
+        "• Ask me about *discrepancies* between the original Python system and the Laravel conversion\n"
+        "• Type `/compare` to run a full gap analysis\n"
+        "• Ask any natural-language question like "
+        "\"What features are missing in the Laravel version?\"",
+        parse_mode="Markdown",
+    )
+
+
+async def _summarise_project_dump(raw_text: str, update: Update) -> str:
+    """Use OpenAI to produce a structured summary of the project dump.
+
+    For large files the text is split into overlapping chunks and each chunk
+    is summarised independently; the partial summaries are then merged into a
+    final structured report.
+    """
+    try:
+        from openai import AsyncOpenAI
+        settings = get_settings()
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+    except Exception as e:
+        return f"_(AI summarisation unavailable: {e})_"
+
+    # ── Split into chunks ─────────────────────────────────────────────────
+    chunks: list[str] = []
+    start = 0
+    while start < len(raw_text):
+        end = start + _CHUNK_SIZE
+        chunks.append(raw_text[start:end])
+        start = end - _CHUNK_OVERLAP
+
+    partial_summaries: list[str] = []
+
+    chunk_system = (
+        "You are a senior software architect analysing a Python codebase that is being "
+        "converted to Laravel PHP. Your goal is to extract a precise, structured inventory "
+        "from this chunk of source code so it can later be compared against the Laravel "
+        "conversion for completeness and discrepancies.\n\n"
+        "For the text chunk provided, extract:\n"
+        "1. **Modules / files** — names and their primary responsibility\n"
+        "2. **Key classes & functions** — names and one-line descriptions\n"
+        "3. **Features / capabilities** — what the code does (business logic)\n"
+        "4. **External integrations** — APIs, services, databases referenced\n"
+        "5. **Notable patterns** — design patterns, frameworks, libraries used\n\n"
+        "Be concise and factual. Use bullet points. Do NOT invent anything not in the text."
+    )
+
+    for i, chunk in enumerate(chunks):
+        if len(chunks) > 1:
+            await update.message.reply_text(
+                f"🔍 Analysing chunk {i + 1}/{len(chunks)}…"
+            )
+
+        try:
+            resp = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": chunk_system},
+                    {"role": "user", "content": f"SOURCE CODE CHUNK:\n\n{chunk}"},
+                ],
+                temperature=0.2,
+                max_tokens=1_500,
+            )
+            partial_summaries.append(resp.choices[0].message.content.strip())
+        except Exception as e:
+            partial_summaries.append(f"_(chunk {i + 1} analysis failed: {e})_")
+
+    if len(partial_summaries) == 1:
+        return partial_summaries[0]
+
+    # ── Merge partial summaries ───────────────────────────────────────────
+    merge_prompt = (
+        "You are a senior software architect. Below are partial summaries of different "
+        "chunks of a Python project that is being converted to Laravel PHP.\n\n"
+        "Merge them into ONE consolidated, de-duplicated inventory with these sections:\n"
+        "1. **Project Overview** — what the system does\n"
+        "2. **Modules & Files** — complete list with responsibilities\n"
+        "3. **Core Features** — grouped by domain (auth, media, social posting, etc.)\n"
+        "4. **External Integrations** — all APIs, services, databases\n"
+        "5. **Key Patterns & Libraries** — frameworks, design patterns, notable deps\n"
+        "6. **Conversion Checklist** — features that MUST be present in the Laravel version\n\n"
+        "Be structured, concise, and complete. Use bullet points and bold headers."
+    )
+    combined = "\n\n---\n\n".join(partial_summaries)
+
+    try:
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": merge_prompt},
+                {"role": "user", "content": combined},
+            ],
+            temperature=0.2,
+            max_tokens=3_000,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return "\n\n---\n\n".join(partial_summaries) + f"\n\n_(merge failed: {e})_"
+
+
+@admin_only
+async def compare_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run a gap analysis between the uploaded Python dump and the Laravel codebase."""
+    summary = context.bot_data.get("project_dump_summary")
+    filename = context.bot_data.get("project_dump_filename", "the uploaded dump")
+
+    if not summary:
+        await update.message.reply_text(
+            "⚠️ No project dump loaded yet.\n\n"
+            "Please upload your Python project dump as a *.txt* file first, "
+            "then run /compare.",
+            parse_mode="Markdown",
+        )
+        return
+
+    await update.message.reply_text(
+        "🔍 Running gap analysis between the Python original and the Laravel conversion…"
+    )
+
+    try:
+        from openai import AsyncOpenAI
+        settings = get_settings()
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+        # Build a description of the current Laravel project structure
+        project_root = Path(__file__).resolve().parent.parent
+        laravel_tree = _build_project_tree(project_root, max_files=200)
+
+        system_prompt = (
+            "You are a senior software architect reviewing a Python-to-Laravel PHP conversion.\n\n"
+            "You have:\n"
+            "1. A structured inventory of the ORIGINAL Python system (provided by the user)\n"
+            "2. A file-tree of the CONVERTED Laravel project\n\n"
+            "Produce a detailed gap analysis with these sections:\n"
+            "**✅ Correctly Converted** — features/modules that appear to be present in Laravel\n"
+            "**❌ Missing / Not Converted** — features from Python that seem absent in Laravel\n"
+            "**⚠️ Likely Discrepancies** — areas where the conversion may be incomplete or wrong\n"
+            "**🔧 Recommended Actions** — prioritised list of what to fix or implement next\n\n"
+            "Base your analysis strictly on the evidence provided. Be specific about file names "
+            "and feature names. Do NOT invent features."
+        )
+
+        user_content = (
+            f"## Original Python System Inventory (from {filename})\n\n"
+            f"{summary}\n\n"
+            f"---\n\n"
+            f"## Current Laravel Project File Tree\n\n"
+            f"{laravel_tree}"
+        )
+
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.2,
+            max_tokens=3_000,
+        )
+
+        gap_report = resp.choices[0].message.content.strip()
+
+        # Store for reference
+        context.bot_data["last_gap_report"] = gap_report
+
+        # Send (split if needed)
+        header = "📊 *Gap Analysis: Python → Laravel*\n\n"
+        full = header + gap_report
+        chunks = [full[i : i + 4_000] for i in range(0, len(full), 4_000)]
+        for idx, chunk in enumerate(chunks):
+            prefix = "" if idx == 0 else f"_(continued {idx + 1}/{len(chunks)})_\n\n"
+            await update.message.reply_text(prefix + chunk, parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"compare_command error: {e}")
+        await update.message.reply_text(
+            f"❌ Gap analysis failed: {e}\n\nMake sure your OpenAI API key is configured."
+        )
+
+
+def _build_project_tree(root: Path, max_files: int = 200) -> str:
+    """Return a compact file-tree string for the project, excluding vendor/node_modules."""
+    skip_dirs = {
+        "vendor", "node_modules", ".git", "__pycache__",
+        ".venv", "venv", "env", "dist", "build", ".idea",
+    }
+    lines: list[str] = []
+    count = 0
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune skipped directories in-place
+        dirnames[:] = sorted(d for d in dirnames if d not in skip_dirs)
+
+        rel = Path(dirpath).relative_to(root)
+        depth = len(rel.parts)
+        indent = "  " * depth
+        folder = rel.parts[-1] if rel.parts else root.name
+        lines.append(f"{indent}📁 {folder}/")
+
+        for fname in sorted(filenames):
+            if count >= max_files:
+                lines.append(f"{indent}  … (truncated)")
+                return "\n".join(lines)
+            lines.append(f"{indent}  {fname}")
+            count += 1
+
+    return "\n".join(lines)
+
+
+# =============================================================================
 # RESUME HANDLING
 # =============================================================================
 
 
 @admin_only
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle document uploads — validate then check if it's a resume (PDF/DOCX)."""
+    """Handle document uploads — validate then route by file type.
+
+    Supported types:
+    - .txt  → project/knowledge dump; content is read and summarised by AI.
+    - .pdf / .doc / .docx → treated as a resume for job screening.
+    """
     from security.file_guard import validate_file
     from security.audit_log import audit, AuditEvent, Severity
 
@@ -1806,10 +2142,17 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     file_name = doc.file_name or "document"
     ext = Path(file_name).suffix.lower()
 
+    if ext == ".txt":
+        await _handle_project_dump(update, context, doc, file_name)
+        return
+
     if ext not in (".pdf", ".docx", ".doc"):
         await update.message.reply_text(
-            "📄 I received a document but it doesn't look like a resume (PDF/DOCX). "
-            "If it's a resume, please send it as a PDF or DOCX file."
+            "📄 I received a document but I'm not sure what to do with it.\n\n"
+            "Supported file types:\n"
+            "• *PDF / DOCX / DOC* — send a résumé for job screening\n"
+            "• *TXT* — send a project dump so I can learn about your project",
+            parse_mode="Markdown",
         )
         return
 
@@ -2221,6 +2564,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await start_command(update, context)
     elif any(w in text_lower for w in ["billing", "usage", "credits", "cost", "tokens"]):
         await _show_usage_summary(update, context)
+    elif any(w in text_lower for w in [
+        "discrepanc", "missing", "compare", "gap", "difference",
+        "conversion", "laravel", "python original",
+    ]):
+        await compare_command(update, context)
     elif any(w in text_lower for w in ["hello", "hi", "hey", "good morning", "good evening"]):
         user_name = update.effective_user.first_name or "there"
         await update.message.reply_text(
@@ -2254,7 +2602,7 @@ async def _ai_assistant_response(
             "If the user wants to create a post, tell them to send a photo or video. "
             "Available commands: /start, /status, /suggest, /packages, /growth, "
             "/freeads, /series, /recycle, /engage, /seo, /job, /jobs, "
-            "/analytics, /usage, /help"
+            "/analytics, /usage, /compare, /help"
         )
 
         # Try to load bot personality from database
@@ -2276,6 +2624,19 @@ async def _ai_assistant_response(
                     system_prompt = business.bot_personality
         except Exception:
             pass  # Use default personality
+
+        # If a project dump has been loaded, append its summary as extra context
+        project_summary = context.bot_data.get("project_dump_summary")
+        if project_summary:
+            system_prompt += (
+                "\n\n=== ORIGINAL PYTHON PROJECT CONTEXT ===\n"
+                "The user has uploaded a dump of their original Python system. "
+                "Use the summary below to answer questions about discrepancies, "
+                "missing features, or differences between the Python original and "
+                "the Laravel PHP conversion.\n\n"
+                + project_summary[:_MAX_PROJECT_CONTEXT_CHARS]
+                + "\n=== END PROJECT CONTEXT ==="
+            )
 
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
@@ -2514,6 +2875,9 @@ def _register_handlers(app: Application) -> Application:
 
     # Content creation command
     app.add_handler(CommandHandler("create", cmd_create))
+
+    # Project dump / gap analysis command
+    app.add_handler(CommandHandler("compare", compare_command))
 
     # Job posting conversation
     job_conv = ConversationHandler(
