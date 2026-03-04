@@ -4,7 +4,6 @@ namespace App\Services;
 
 /**
  * Platform Router Service — rule-based content routing, zero token cost.
- * Converted from Python: agents/platform_router.py
  *
  * Decides which platforms each piece of media should be posted to,
  * based on dimensions, duration, content category, and algorithm intelligence.

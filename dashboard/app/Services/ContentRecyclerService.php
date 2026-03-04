@@ -7,7 +7,6 @@ use App\Models\ContentCalendar;
 
 /**
  * Content Recycler Service — get 6x more out of every piece of content.
- * Converted from Python: agents/content_recycler.py
  *
  * Features:
  * - Find top-performing content for repurposing

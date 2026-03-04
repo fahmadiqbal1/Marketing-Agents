@@ -8,7 +8,6 @@ use Illuminate\Support\Str;
 /**
  * Media Utilities — file management, metadata extraction, and storage helpers.
  *
- * Converted from Python: tools/media_utils.py
  *
  * Handles:
  *   - File path generation and organization

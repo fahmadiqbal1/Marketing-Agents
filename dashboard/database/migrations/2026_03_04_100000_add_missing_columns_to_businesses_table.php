@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Schema;
  * These columns are required for billing/credit management, multi-tenant
  * subscription handling, and slugged URL routing.
  *
- * Converted from Python: memory/models.py → Business
  */
 return new class extends Migration
 {

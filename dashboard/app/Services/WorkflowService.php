@@ -17,7 +17,6 @@ use Carbon\Carbon;
 /**
  * Workflow Orchestrator Service — central workflow connecting all agents.
  *
- * Converted from Python: orchestrator/workflow.py
  *
  * Workflow stages:
  * 1. analyze → Vision analysis of media

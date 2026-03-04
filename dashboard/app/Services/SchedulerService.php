@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Log;
 /**
  * Scheduler Service — publishes scheduled posts and retries failed ones.
  *
- * Converted from Python: services/scheduler.py
  *
  * Designed to be called from Laravel's task scheduler (Console\Kernel).
  * Checks the database for:

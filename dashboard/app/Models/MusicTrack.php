@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * Background music track (royalty-free library + trending discoveries).
- * Converted from Python: memory/models.py → MusicTrack
  */
 class MusicTrack extends Model
 {

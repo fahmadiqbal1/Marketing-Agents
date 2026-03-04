@@ -6,7 +6,6 @@ use App\Models\MusicTrack;
 
 /**
  * Music Researcher Service — discovers background music for short-form video.
- * Converted from Python: agents/music_researcher.py
  *
  * Features:
  * - Curated royalty-free library tagged by mood/genre

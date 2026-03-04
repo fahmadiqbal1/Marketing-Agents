@@ -13,7 +13,6 @@ use Carbon\Carbon;
  * Content Memory Service — tracks media inventory, detects accumulation patterns,
  * and manages content similarity for collages and compilation videos.
  *
- * Converted from Python: memory/content_memory.py
  *
  * Key Features:
  * - Category-based content tracking

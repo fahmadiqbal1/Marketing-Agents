@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * AI-proposed promotional packages for business services.
- * Converted from Python: memory/models.py → PromotionalPackage
  */
 class PromotionalPackage extends Model
 {

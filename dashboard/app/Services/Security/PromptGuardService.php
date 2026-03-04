@@ -7,7 +7,6 @@ use Illuminate\Support\Facades\Log;
 /**
  * Prompt Guard — protects AI agents from prompt injection attacks.
  *
- * Converted from Python: security/prompt_guard.py
  *
  * Covers two vectors:
  * 1. User-supplied text — sanitized before being interpolated into LLM prompts

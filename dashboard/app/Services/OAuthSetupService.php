@@ -10,7 +10,6 @@ use Illuminate\Support\Str;
 
 /**
  * OAuth Setup Service — handles OAuth 2.0 authorization for all social platforms.
- * Converted from Python tools: tiktok_auth_setup.py, google_auth_setup.py, linkedin_auth_setup.py, etc.
  *
  * Platforms supported: TikTok, Google (YouTube), LinkedIn, Twitter/X, Meta (Instagram/Facebook)
  */

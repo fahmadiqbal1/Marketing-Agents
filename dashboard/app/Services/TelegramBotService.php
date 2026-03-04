@@ -11,7 +11,6 @@ use Illuminate\Support\Facades\Storage;
 
 /**
  * Telegram Bot Service — handles incoming Telegram webhook and media collection.
- * Converted from Python: bot/telegram_bot.py
  *
  * Architecture: Webhook-based (not polling)
  * Each business has its own bot token (multi-tenant).

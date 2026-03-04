@@ -24,9 +24,9 @@ return new class extends Migration
             });
         }
 
-        // Add base_url column to ai_provider_configs for local/custom endpoints
-        if (Schema::hasTable('ai_provider_configs') && ! Schema::hasColumn('ai_provider_configs', 'base_url')) {
-            Schema::table('ai_provider_configs', function (Blueprint $table) {
+        // Add base_url column to ai_model_configs for local/custom endpoints
+        if (Schema::hasTable('ai_model_configs') && ! Schema::hasColumn('ai_model_configs', 'base_url')) {
+            Schema::table('ai_model_configs', function (Blueprint $table) {
                 $table->string('base_url', 500)->nullable()->after('model_name');
             });
         }
@@ -36,8 +36,8 @@ return new class extends Migration
     {
         Schema::dropIfExists('user_business_links');
 
-        if (Schema::hasTable('ai_provider_configs') && Schema::hasColumn('ai_provider_configs', 'base_url')) {
-            Schema::table('ai_provider_configs', function (Blueprint $table) {
+        if (Schema::hasTable('ai_model_configs') && Schema::hasColumn('ai_model_configs', 'base_url')) {
+            Schema::table('ai_model_configs', function (Blueprint $table) {
                 $table->dropColumn('base_url');
             });
         }

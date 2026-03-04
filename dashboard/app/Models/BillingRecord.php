@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Monthly billing record per tenant — tracks AI usage costs.
- * Converted from Python: memory/models.py → BillingRecord
  */
 class BillingRecord extends Model
 {

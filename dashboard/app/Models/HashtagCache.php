@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * Pre-built hashtag database per category and platform.
- * Converted from Python: memory/models.py → HashtagCache
  */
 class HashtagCache extends Model
 {

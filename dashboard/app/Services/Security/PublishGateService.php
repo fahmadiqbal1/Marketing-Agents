@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\Storage;
  * Publish Gate — the **last line of defence** before content reaches
  * a live social media account.
  *
- * Converted from Python: security/publish_gate.py
  *
  * Runs immediately before every publish operation and performs comprehensive
  * checks on both the media file and the caption/description text.

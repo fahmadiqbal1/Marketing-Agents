@@ -6,7 +6,6 @@ use Illuminate\Support\Facades\Storage;
 
 /**
  * Media Editor Service — local image/video processing.
- * Converted from Python: agents/media_editor.py
  *
  * Features:
  * - Image resizing and cropping

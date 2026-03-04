@@ -8,7 +8,6 @@ use App\Models\Business;
 
 /**
  * Job Manager Service — creates job listings and screens candidates.
- * Converted from Python: agents/job_manager.py
  *
  * Features:
  * - Generate AI-powered job descriptions

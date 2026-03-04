@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Tracks what was posted when for balanced content scheduling.
- * Converted from Python: memory/models.py → ContentCalendar
  */
 class ContentCalendar extends Model
 {

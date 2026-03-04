@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Publisher Service — posts content to social media platforms.
- * Converted from Python: agents/publisher.py
  *
  * Each platform has its own publishing method with API-specific logic.
  * Credentials are loaded from the SocialPlatform model (encrypted).
