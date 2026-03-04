@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Centralized security audit log.
- * Converted from Python: memory/models.py → AuditLog
  */
 class AuditLog extends Model
 {

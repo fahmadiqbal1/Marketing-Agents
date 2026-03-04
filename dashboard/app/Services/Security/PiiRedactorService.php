@@ -8,7 +8,6 @@ use Illuminate\Support\Facades\Log;
  * PII Redactor — detects and masks personally identifiable information
  * in text before it reaches social media or logs.
  *
- * Converted from Python: security/pii_redactor.py
  *
  * Patterns detected:
  *   - Email addresses

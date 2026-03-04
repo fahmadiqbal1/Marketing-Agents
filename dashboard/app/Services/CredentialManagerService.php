@@ -11,7 +11,6 @@ use Carbon\Carbon;
 /**
  * Credential Manager Service — per-tenant platform credential CRUD with encryption.
  *
- * Converted from Python: memory/credentials.py
  *
  * Features:
  * - Encrypted storage of platform tokens

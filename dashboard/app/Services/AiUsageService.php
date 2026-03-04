@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\Log;
 /**
  * AI Usage Tracker — meters every OpenAI / Gemini API call per tenant.
  *
- * Converted from Python: services/ai_usage.py
  *
  * Tracks token counts, estimates cost, enforces plan quotas, and logs
  * usage to the ai_usage_logs table for billing.

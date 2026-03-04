@@ -10,7 +10,6 @@ use Illuminate\Support\Str;
 /**
  * Voiceover Service — TTS audio generation for video narration.
  *
- * Converted from Python: tools/voiceover.py
  *
  * Supports:
  * - OpenAI TTS API (primary, high quality)

@@ -272,6 +272,11 @@
                     <input type="text" id="aiModelName" class="form-control">
                     <div class="form-text text-secondary" id="aiModelHint"></div>
                 </div>
+                <div class="mb-3" id="aiModelBaseUrlGroup" style="display:none;">
+                    <label class="form-label text-secondary small">Base URL</label>
+                    <input type="url" id="aiModelBaseUrl" class="form-control" placeholder="http://localhost:11434">
+                    <div class="form-text text-secondary">Server URL for local/custom AI endpoints</div>
+                </div>
             </div>
             <div class="modal-footer border-0">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -291,6 +296,8 @@ const AI_PROVIDERS = [
     { key: 'mistral',       name: 'Mistral AI',       icon: 'bi-wind',               color: '#ff7000', defaultModel: 'mistral-large-latest',        hint: 'mistral-large-latest, mistral-medium, mistral-small' },
     { key: 'deepseek',      name: 'DeepSeek',         icon: 'bi-search-heart',       color: '#0ea5e9', defaultModel: 'deepseek-chat',              hint: 'deepseek-chat, deepseek-coder' },
     { key: 'groq',          name: 'Groq',             icon: 'bi-lightning-charge',   color: '#f97316', defaultModel: 'llama-3.1-70b-versatile',    hint: 'llama-3.1-70b-versatile, mixtral-8x7b-32768' },
+    { key: 'ollama',        name: 'Ollama (Local)',    icon: 'bi-pc-display',        color: '#6366f1', defaultModel: 'llama3',                     hint: 'llama3, mistral, codellama, phi3 — runs on your machine', needsBaseUrl: true },
+    { key: 'openai_compatible', name: 'Custom Endpoint', icon: 'bi-plug',            color: '#8b5cf6', defaultModel: 'default',                    hint: 'Any OpenAI-compatible API (LM Studio, vLLM, text-generation-webui)', needsBaseUrl: true },
 ];
 
 async function loadAiModels() {
@@ -348,6 +355,9 @@ function openAiModelModal(key, name, defaultModel, hint) {
     document.getElementById('aiModelName').value = '';
     document.getElementById('aiModelName').placeholder = defaultModel;
     document.getElementById('aiModelHint').textContent = 'Available models: ' + hint;
+    document.getElementById('aiModelBaseUrl').value = '';
+    const provider = AI_PROVIDERS.find(p => p.key === key);
+    document.getElementById('aiModelBaseUrlGroup').style.display = (provider && provider.needsBaseUrl) ? 'block' : 'none';
     new bootstrap.Modal(document.getElementById('aiModelModal')).show();
 }
 
@@ -355,8 +365,9 @@ async function saveAiModel(btn) {
     const provider  = document.getElementById('aiModelProviderKey').value;
     const apiKey    = document.getElementById('aiModelApiKey').value.trim();
     const modelName = document.getElementById('aiModelName').value.trim();
-    if (!apiKey) { showToast('Please enter an API key', 'warning'); return; }
-    const result = await ajaxPost('/ai-models', { provider, api_key: apiKey, model_name: modelName || null }, btn);
+    const baseUrl   = document.getElementById('aiModelBaseUrl').value.trim();
+    if (!apiKey && !['ollama'].includes(provider)) { showToast('Please enter an API key', 'warning'); return; }
+    const result = await ajaxPost('/ai-models', { provider, api_key: apiKey || 'local', model_name: modelName || null, base_url: baseUrl || null }, btn);
     if (result.success) {
         bootstrap.Modal.getInstance(document.getElementById('aiModelModal')).hide();
         loadAiModels();

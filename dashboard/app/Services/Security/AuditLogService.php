@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Http;
 /**
  * Audit Logger — centralized, structured logging for all security-relevant events.
  *
- * Converted from Python: security/audit_log.py
  *
  * All events are written to both:
  *   1. The audit_logs MySQL table (queryable, persistent)

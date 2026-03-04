@@ -1,45 +1,20 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-dist/
-build/
-.eggs/
-
-# Virtual environment
-.venv/
-venv/
-env/
-
-# Environment variables
-.env
-config/*.json
-config/credentials/
-
-# Media files (too large for git)
-media/inbox/
-media/processed/
-media/snapchat_ready/
-media/collages/
-media/compilations/
-
-# Database
-*.db
-
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
+# Environment
+.env
+
 # Logs
 *.log
 logs/
 
-# ChromaDB data
-chroma_data/
+# OS
+.DS_Store
+Thumbs.db
 
-# Google OAuth tokens
-token.json
-token_*.json
+# Database files
+*.sqlite
+*.db

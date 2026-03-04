@@ -10,6 +10,7 @@ use App\Models\ContentStrategy;
 use App\Models\JobCandidate;
 use App\Models\JobListing;
 use App\Models\KnowledgeSource;
+use App\Models\PlatformAgent;
 use App\Models\Post;
 use App\Models\SocialPlatform;
 use App\Models\User;
@@ -280,13 +281,93 @@ class DashboardController extends Controller
         return response()->json(['success'=>true,'message'=>'AI model removed.']);
     }
 
-    public function listBusinesses() { return response()->json(['success'=>true,'businesses'=>Business::where('owner_id',Auth::id())->get(['id','name','industry'])]); }
+    public function listBusinesses()
+    {
+        // Try junction table first, fall back to owner_id
+        try {
+            $businesses = \App\Models\UserBusinessLink::where('user_id', Auth::id())
+                ->with('business:id,name,industry,slug,subscription_plan,is_active')
+                ->get()
+                ->map(fn($link) => $link->business)
+                ->filter();
+            if ($businesses->isNotEmpty()) {
+                return response()->json([
+                    'success' => true,
+                    'businesses' => $businesses->values(),
+                    'current_business_id' => $this->businessId(),
+                ]);
+            }
+        } catch (\Exception $e) {
+            // Junction table may not exist yet
+        }
+
+        return response()->json([
+            'success' => true,
+            'businesses' => Business::where('owner_id', Auth::id())->get(['id', 'name', 'industry']),
+            'current_business_id' => $this->businessId(),
+        ]);
+    }
 
     public function createBusiness(Request $request)
     {
-        $request->validate(['name'=>'required|string|max:255','industry'=>'nullable|string|max:100']);
-        $b = Business::create(['name'=>$request->input('name'),'industry'=>$request->input('industry'),'owner_id'=>Auth::id(),'timezone'=>'UTC']);
-        return response()->json(['success'=>true,'business'=>$b]);
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'industry' => 'nullable|string|max:100',
+            'selected_platforms' => 'nullable|array',
+        ]);
+
+        $b = Business::create([
+            'name' => $request->input('name'),
+            'industry' => $request->input('industry'),
+            'owner_id' => Auth::id(),
+            'timezone' => 'UTC',
+        ]);
+
+        // Link user → new business via junction table
+        try {
+            \App\Models\UserBusinessLink::firstOrCreate(
+                ['user_id' => Auth::id(), 'business_id' => $b->id],
+                ['role' => 'owner']
+            );
+            // Also ensure current business is linked
+            \App\Models\UserBusinessLink::firstOrCreate(
+                ['user_id' => Auth::id(), 'business_id' => $this->businessId()],
+                ['role' => 'owner']
+            );
+        } catch (\Exception $e) {
+            // Junction table may not exist yet
+        }
+
+        // Auto-clone trained platform agents from current business
+        $selectedPlatforms = $request->input('selected_platforms', []);
+        if (!empty($selectedPlatforms)) {
+            try {
+                $agents = PlatformAgent::where('business_id', $this->businessId())
+                    ->whereIn('platform', $selectedPlatforms)
+                    ->get();
+                foreach ($agents as $agent) {
+                    PlatformAgent::create([
+                        'business_id' => $b->id,
+                        'platform' => $agent->platform,
+                        'system_prompt_override' => $agent->system_prompt_override,
+                        'agent_type' => $agent->agent_type,
+                        'learning_profile' => $agent->learning_profile,
+                        'performance_stats' => $agent->performance_stats,
+                        'trained_from_repos' => $agent->trained_from_repos,
+                        'skill_version' => $agent->skill_version,
+                        'is_active' => true,
+                    ]);
+                }
+            } catch (\Exception $e) {
+                // Agent cloning may fail if table doesn't exist
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'business' => $b,
+            'agents_cloned' => count($selectedPlatforms),
+        ]);
     }
 
     public function switchBusiness(Request $request, int $businessId)
@@ -295,9 +376,22 @@ class DashboardController extends Controller
         if (!$business) {
             return response()->json(['error' => 'Business not found'], 404);
         }
-        if ($business->owner_id !== Auth::id()) {
+
+        // Check access: owner_id or junction table
+        $hasAccess = ($business->owner_id === Auth::id());
+        if (!$hasAccess) {
+            try {
+                $hasAccess = \App\Models\UserBusinessLink::where('user_id', Auth::id())
+                    ->where('business_id', $businessId)
+                    ->exists();
+            } catch (\Exception $e) {
+                // Junction table may not exist
+            }
+        }
+        if (!$hasAccess) {
             return response()->json(['error' => 'Access denied'], 403);
         }
+
         User::where('id', Auth::id())->update(['business_id'=>$business->id]);
         return response()->json(['success'=>true,'business_name'=>$business->name,'message'=>'Switched to '.$business->name]);
     }

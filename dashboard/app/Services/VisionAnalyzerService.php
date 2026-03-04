@@ -7,7 +7,6 @@ use Illuminate\Support\Facades\Storage;
 
 /**
  * Vision Analyzer Service — AI-powered image/video analysis.
- * Converted from Python: agents/vision_analyzer.py
  *
  * Features:
  * - Content category detection

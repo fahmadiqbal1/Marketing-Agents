@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Telegram bot configuration per business.
- * Converted from Python: memory/models.py → TelegramBotConfig
  */
 class TelegramBot extends Model
 {

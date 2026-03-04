@@ -8,7 +8,6 @@ use App\Models\Business;
 
 /**
  * Content Strategist Service — weekly planning, gap detection, priority scoring.
- * Converted from Python: agents/content_strategist.py
  *
  * Features:
  * - Plan weekly content based on pillar balance and buyer journey

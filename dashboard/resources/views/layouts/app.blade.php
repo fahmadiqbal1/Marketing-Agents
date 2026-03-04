@@ -363,6 +363,51 @@
 <script>
 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
 
+// ── AJAX Helpers ──────────────────────────────────────────────
+async function ajaxGet(path) {
+    const r = await fetch(path, { headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken } });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.message || 'Request failed');
+    return d;
+}
+async function ajaxPost(path, body = {}, btn = null) {
+    if (btn) btn.disabled = true;
+    try {
+        const r = await fetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (d.success) showToast(d.message || 'Done', 'success');
+        else if (d.message) showToast(d.message, 'error');
+        return d;
+    } catch (e) {
+        showToast(e.message || 'Request failed', 'error');
+        return { success: false };
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+async function ajaxDelete(path, btn = null) {
+    if (btn) btn.disabled = true;
+    try {
+        const r = await fetch(path, {
+            method: 'DELETE',
+            headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+        });
+        const d = await r.json();
+        if (d.success) showToast(d.message || 'Deleted', 'success');
+        else if (d.message) showToast(d.message, 'error');
+        return d;
+    } catch (e) {
+        showToast(e.message || 'Request failed', 'error');
+        return { success: false };
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 // ── Toast Helper ──────────────────────────────────────────────
 function showToast(message, type = 'info') {
     const colors = { success: '#198754', error: '#dc3545', info: '#0dcaf0', warning: '#ffc107' };

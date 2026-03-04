@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Tracks engagement events across platforms for analytics.
- * Converted from Python: memory/models.py → EngagementMetric
  */
 class EngagementEvent extends Model
 {

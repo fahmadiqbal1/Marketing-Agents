@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Platform Agents Service — specialized AI agents for each social media platform.
- * Converted from Python: agents/platform_agents.py
  *
  * Each platform agent understands:
  * - Platform-specific algorithm rules

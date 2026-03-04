@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\DB;
 /**
  * Auto-Insights Generator — periodic analysis of engagement data.
  *
- * Converted from Python: services/insights_generator.py
  *
  * Generates actionable insights like:
  *   - Best performing platform / content category

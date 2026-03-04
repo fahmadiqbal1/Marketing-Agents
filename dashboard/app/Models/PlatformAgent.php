@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Per-business, per-platform AI agent configuration and learning data.
- * Converted from Python: memory/models.py → PlatformAgentConfig
  */
 class PlatformAgent extends Model
 {

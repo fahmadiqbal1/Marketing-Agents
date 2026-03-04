@@ -8,7 +8,6 @@ use Illuminate\Support\Facades\Crypt;
 /**
  * Credential encryption utility — AES-256 encryption for tokens at rest.
  *
- * Converted from Python: security/encryption.py
  *
  * Uses Laravel's built-in encryption which uses APP_KEY as the master key.
  * For tokens stored in the database (OAuth tokens, API keys), this provides

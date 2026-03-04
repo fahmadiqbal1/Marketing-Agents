@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Storage;
 /**
  * Speech-to-Text Service — transcription for voice notes using OpenAI Whisper API.
  *
- * Converted from Python: tools/speech_to_text.py
  *
  * Features:
  * - Voice note transcription using OpenAI Whisper API

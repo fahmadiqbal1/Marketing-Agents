@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Log;
 /**
  * Event Bus — simple pub/sub for real-time notifications.
  *
- * Converted from Python: services/event_bus.py
  *
  * Components emit events; the dashboard receives them via polling or SSE.
  * Uses Laravel's event system and cache for recent events buffer.

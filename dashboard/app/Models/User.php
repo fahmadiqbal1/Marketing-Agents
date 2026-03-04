@@ -54,6 +54,16 @@ class User extends Authenticatable
         return $this->ownedBusinesses();
     }
 
+    /**
+     * All businesses the user can access (via junction table).
+     */
+    public function businessLinks(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(Business::class, 'user_business_links')
+            ->withPivot('role')
+            ->withTimestamps();
+    }
+
     // ── Helpers ─────────────────────────────────────────────────
 
     public function isOwner(): bool   { return $this->role === 'owner'; }

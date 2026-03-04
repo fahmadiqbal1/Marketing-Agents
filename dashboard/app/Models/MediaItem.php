@@ -8,7 +8,6 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * Media item (photo/video) received from Telegram or uploaded.
- * Converted from Python: memory/models.py → MediaItem
  */
 class MediaItem extends Model
 {

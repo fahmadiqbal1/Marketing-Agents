@@ -7,7 +7,6 @@ use App\Models\Business;
 
 /**
  * Package Brain Service — proposes service bundles and seasonal promotions.
- * Converted from Python: agents/package_brain.py
  *
  * Marketing Psychology Applied:
  * - Charm Pricing: Rs 1,999 instead of Rs 2,000 (left-digit effect)

@@ -133,7 +133,7 @@
         </div>
 
         {{-- App Info --}}
-        <div class="card p-4">
+        <div class="card p-4 mb-4">
             <h6 class="text-white mb-3"><i class="bi bi-info-circle me-2 text-secondary"></i>App Info</h6>
             <div class="d-flex justify-content-between align-items-center py-2 border-bottom border-secondary border-opacity-25">
                 <span class="text-secondary small">App URL</span>
@@ -147,6 +147,18 @@
                 <span class="text-secondary small">Laravel Version</span>
                 <code class="text-secondary small">{{ app()->version() }}</code>
             </div>
+        </div>
+
+        {{-- Logout --}}
+        <div class="card p-4">
+            <h6 class="text-white mb-3"><i class="bi bi-box-arrow-right me-2 text-danger"></i>Session</h6>
+            <p class="text-secondary small mb-3">Sign out of your account on this device.</p>
+            <form method="POST" action="{{ route('logout') }}">
+                @csrf
+                <button type="submit" class="btn btn-outline-danger btn-sm">
+                    <i class="bi bi-box-arrow-right me-1"></i> Logout
+                </button>
+            </form>
         </div>
     </div>
 </div>

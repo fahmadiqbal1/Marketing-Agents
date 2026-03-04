@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * Defines available subscription plans and their limits.
- * Converted from Python: memory/models.py → SubscriptionPlan
  */
 class SubscriptionPlan extends Model
 {
