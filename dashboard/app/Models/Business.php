@@ -12,8 +12,16 @@ class Business extends Model
     use HasFactory;
 
     protected $fillable = [
-        'name', 'industry', 'website', 'phone', 'address',
+        'name', 'slug', 'industry', 'website', 'phone', 'address',
         'timezone', 'brand_voice', 'logo_url', 'owner_id',
+        'custom_categories', 'subscription_plan',
+        'uses_platform_api_keys', 'credit_approved', 'is_active',
+    ];
+
+    protected $casts = [
+        'uses_platform_api_keys' => 'boolean',
+        'credit_approved'        => 'boolean',
+        'is_active'              => 'boolean',
     ];
 
     public function owner(): BelongsTo
@@ -69,5 +77,40 @@ class Business extends Model
     public function telegramBots(): HasMany
     {
         return $this->hasMany(TelegramBot::class);
+    }
+
+    public function mediaItems(): HasMany
+    {
+        return $this->hasMany(MediaItem::class);
+    }
+
+    public function promotionalPackages(): HasMany
+    {
+        return $this->hasMany(PromotionalPackage::class);
+    }
+
+    public function engagementEvents(): HasMany
+    {
+        return $this->hasMany(EngagementEvent::class);
+    }
+
+    public function contentCalendars(): HasMany
+    {
+        return $this->hasMany(ContentCalendar::class);
+    }
+
+    public function platformAgents(): HasMany
+    {
+        return $this->hasMany(PlatformAgent::class);
+    }
+
+    public function aiUsageLogs(): HasMany
+    {
+        return $this->hasMany(AiUsageLog::class);
+    }
+
+    public function billingRecords(): HasMany
+    {
+        return $this->hasMany(BillingRecord::class);
     }
 }

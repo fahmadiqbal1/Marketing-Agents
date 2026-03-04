@@ -48,6 +48,7 @@ class AuditLog extends Model
     const EVENT_PUBLISH_FAILED  = 'publish.failed';
     const EVENT_SECURITY_BLOCK  = 'security.blocked';
     const EVENT_RATE_LIMIT      = 'security.rate_limit';
+    const EVENT_CREDIT_REQUESTED = 'billing.credit_requested';
 
     // ── Scopes ────────────────────────────────────────────────────
 
