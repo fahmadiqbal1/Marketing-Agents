@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class AiModelConfig extends Model
 {
     protected $fillable = [
-        'business_id', 'provider', 'api_key', 'model_name', 'is_default', 'is_active',
+        'business_id', 'provider', 'api_key', 'model_name', 'base_url', 'is_default', 'is_active',
     ];
 
     protected $casts = [

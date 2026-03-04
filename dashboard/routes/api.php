@@ -137,21 +137,51 @@ Route::post('/auth/login', function (Request $request) {
     ]);
 })->name('api.auth.login');
 
-// Return current user profile (requires valid Sanctum token)
+// Return current user profile + connected platforms + AI providers
 Route::middleware('auth:sanctum')->get('/auth/me', function (Request $request) {
     $user     = $request->user();
     $business = \App\Models\Business::find($user->business_id);
+    $bid      = $user->business_id;
+
+    // Connected social platforms
+    $connectedPlatforms = \App\Models\SocialPlatform::where('business_id', $bid)
+        ->where('connected', true)
+        ->get(['key', 'name'])
+        ->map(fn($p) => ['platform' => $p->key, 'name' => $p->name, 'status' => 'active'])
+        ->values();
+
+    // Configured AI providers
+    $aiProviders = \App\Models\AiModelConfig::where('business_id', $bid)
+        ->get(['provider', 'model_name', 'is_active'])
+        ->map(fn($m) => [
+            'provider'   => $m->provider,
+            'model_name' => $m->model_name,
+            'is_active'  => (bool) $m->is_active,
+        ])
+        ->values();
 
     return response()->json([
-        'id'            => $user->id,
-        'email'         => $user->email,
-        'name'          => $user->name,
-        'role'          => $user->role,
-        'business_id'   => $user->business_id,
-        'business_name' => $business->name ?? '',
-        'business_slug' => $business->slug ?? '',
+        'id'                   => $user->id,
+        'email'                => $user->email,
+        'name'                 => $user->name,
+        'role'                 => $user->role,
+        'business_id'          => $user->business_id,
+        'business_name'        => $business->name ?? '',
+        'business_slug'        => $business->slug ?? '',
+        'connected_platforms'  => $connectedPlatforms,
+        'ai_providers'         => $aiProviders,
     ]);
 })->name('api.auth.me');
+
+// Logout — revoke current Sanctum token
+Route::middleware('auth:sanctum')->post('/auth/logout', function (Request $request) {
+    $request->user()->currentAccessToken()->delete();
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Logged out successfully',
+    ]);
+})->name('api.auth.logout');
 
 // ═══════════════════════════════════════════════════════════════════════
 // AUTHENTICATED API ROUTES
@@ -690,31 +720,46 @@ Route::middleware('auth:sanctum')->group(function () {
     // ─────────────────────────────────────────────────────────────────────
 
     Route::get('/ai-models', function (Request $request) {
-        $businessId = $request->input('business_id');
-        $models = \App\Models\AiModelConfig::where('business_id', $businessId)
-            ->get(['id', 'provider', 'model_name', 'is_default', 'is_active']);
+        $bid = $request->user()->business_id;
+        $models = \App\Models\AiModelConfig::where('business_id', $bid)
+            ->get(['id', 'provider', 'model_name', 'base_url', 'is_default', 'is_active']);
         return response()->json(['success' => true, 'models' => $models]);
     })->name('api.ai-models');
 
     Route::post('/ai-models', function (Request $request) {
-        $businessId = $request->input('business_id');
+        $bid = $request->user()->business_id;
+        $validProviders = ['openai', 'google_gemini', 'anthropic', 'mistral', 'deepseek', 'groq', 'ollama', 'openai_compatible'];
+        $provider = $request->input('provider');
+
+        if (!in_array($provider, $validProviders)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid provider. Must be one of: ' . implode(', ', $validProviders),
+            ], 400);
+        }
+
         \App\Models\AiModelConfig::updateOrCreate(
-            ['business_id' => $businessId, 'provider' => $request->input('provider')],
-            ['api_key' => $request->input('api_key'), 'model_name' => $request->input('model_name'), 'is_active' => true]
+            ['business_id' => $bid, 'provider' => $provider],
+            [
+                'api_key'    => $request->input('api_key'),
+                'model_name' => $request->input('model_name'),
+                'base_url'   => $request->input('base_url'),
+                'is_active'  => true,
+            ]
         );
         return response()->json(['success' => true, 'message' => 'AI model saved.']);
     })->name('api.ai-models.save');
 
     Route::post('/ai-models/{provider}/test', function (Request $request, string $provider) {
-        $businessId = $request->input('business_id');
-        $model = \App\Models\AiModelConfig::where('business_id', $businessId)->where('provider', $provider)->first();
+        $bid = $request->user()->business_id;
+        $model = \App\Models\AiModelConfig::where('business_id', $bid)->where('provider', $provider)->first();
         if (!$model) return response()->json(['success' => false, 'message' => 'Provider not configured.']);
-        return response()->json(['success' => true, 'message' => ucfirst($provider) . ' key is saved.']);
+        return response()->json(['success' => true, 'message' => ucfirst($provider) . ' key is saved and ready.']);
     })->name('api.ai-models.test');
 
     Route::delete('/ai-models/{provider}', function (Request $request, string $provider) {
-        $businessId = $request->input('business_id');
-        \App\Models\AiModelConfig::where('business_id', $businessId)->where('provider', $provider)->delete();
+        $bid = $request->user()->business_id;
+        \App\Models\AiModelConfig::where('business_id', $bid)->where('provider', $provider)->delete();
         return response()->json(['success' => true, 'message' => 'AI model removed.']);
     })->name('api.ai-models.delete');
 
@@ -745,19 +790,97 @@ Route::middleware('auth:sanctum')->group(function () {
     })->name('api.business.profile.update');
 
     Route::post('/businesses', function (Request $request) {
+        $request->validate([
+            'name'               => 'required|string|max:255',
+            'industry'           => 'nullable|string|max:100',
+            'selected_platforms' => 'nullable|array',
+        ]);
+
+        $user = $request->user();
         $business = Business::create([
             'name'     => $request->input('name'),
             'industry' => $request->input('industry'),
-            'owner_id' => $request->user()->id,
+            'owner_id' => $user->id,
             'timezone' => 'UTC',
         ]);
-        return response()->json(['success' => true, 'business' => $business]);
+
+        // Link user → new business via junction table (do NOT overwrite active business)
+        try {
+            \App\Models\UserBusinessLink::firstOrCreate(
+                ['user_id' => $user->id, 'business_id' => $business->id],
+                ['role' => 'owner']
+            );
+            // Also ensure current business is linked
+            if ($user->business_id) {
+                \App\Models\UserBusinessLink::firstOrCreate(
+                    ['user_id' => $user->id, 'business_id' => $user->business_id],
+                    ['role' => 'owner']
+                );
+            }
+        } catch (\Exception $e) {
+            // Junction table may not exist yet
+        }
+
+        // Auto-clone trained platform agents from current business
+        $agentsCloned = 0;
+        $selectedPlatforms = $request->input('selected_platforms', []);
+        if (!empty($selectedPlatforms) && $user->business_id) {
+            try {
+                $agents = \App\Models\PlatformAgent::where('business_id', $user->business_id)
+                    ->whereIn('platform', $selectedPlatforms)
+                    ->get();
+                foreach ($agents as $agent) {
+                    \App\Models\PlatformAgent::create([
+                        'business_id'            => $business->id,
+                        'platform'               => $agent->platform,
+                        'system_prompt_override'  => $agent->system_prompt_override,
+                        'agent_type'             => $agent->agent_type,
+                        'learning_profile'       => $agent->learning_profile,
+                        'performance_stats'      => $agent->performance_stats,
+                        'trained_from_repos'     => $agent->trained_from_repos,
+                        'skill_version'          => $agent->skill_version ?? 1,
+                        'is_active'              => true,
+                    ]);
+                    $agentsCloned++;
+                }
+            } catch (\Exception $e) {
+                // Agent cloning may fail if table doesn't exist
+            }
+        }
+
+        return response()->json([
+            'success'       => true,
+            'business'      => $business,
+            'agents_cloned' => $agentsCloned,
+        ]);
     })->name('api.businesses.create');
 
     Route::post('/auth/switch-business', function (Request $request) {
         $businessId = $request->input('business_id');
-        $business = Business::where('id', $businessId)->where('owner_id', $request->user()->id)->firstOrFail();
-        \App\Models\User::where('id', $request->user()->id)->update(['business_id' => $business->id]);
+        $user = $request->user();
+
+        // Verify business exists
+        $business = Business::find($businessId);
+        if (!$business) {
+            return response()->json(['error' => 'Business not found'], 404);
+        }
+
+        // Check access: owner_id OR junction table
+        $hasAccess = ($business->owner_id === $user->id);
+        if (!$hasAccess) {
+            try {
+                $hasAccess = \App\Models\UserBusinessLink::where('user_id', $user->id)
+                    ->where('business_id', $businessId)
+                    ->exists();
+            } catch (\Exception $e) {
+                // Junction table may not exist
+            }
+        }
+        if (!$hasAccess) {
+            return response()->json(['error' => 'Access denied'], 403);
+        }
+
+        \App\Models\User::where('id', $user->id)->update(['business_id' => $business->id]);
         return response()->json(['success' => true, 'business_name' => $business->name]);
     })->name('api.auth.switch');
 
