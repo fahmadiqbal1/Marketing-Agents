@@ -1,0 +1,18 @@
+#!/usr/bin/env php
+<?php
+
+use Illuminate\Foundation\Application;
+use Symfony\Component\Console\Input\ArgvInput;
+
+define('LARAVEL_START', microtime(true));
+
+// Register the Composer autoloader from the dashboard directory
+require __DIR__.'/dashboard/vendor/autoload.php';
+
+// Bootstrap Laravel from the dashboard directory
+/** @var Application $app */
+$app = require_once __DIR__.'/dashboard/bootstrap/app.php';
+
+$status = $app->handleCommand(new ArgvInput);
+
+exit($status);
