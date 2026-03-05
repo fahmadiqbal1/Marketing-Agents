@@ -144,6 +144,17 @@
     @foreach($allPlatforms as $p)
         @php
             $isConnected = in_array($p['key'], $connectedKeys);
+            $platformData = collect($connected)->first(fn($c) => (is_array($c) ? ($c['key'] ?? '') : ($c->key ?? '')) === $p['key']);
+            $testStatus = null;
+            $testMessage = null;
+            $testedAt = null;
+            if ($platformData) {
+                $testStatus = is_array($platformData) ? ($platformData['last_test_status'] ?? null) : ($platformData->last_test_status ?? null);
+                $testMessage = is_array($platformData) ? ($platformData['last_test_message'] ?? null) : ($platformData->last_test_message ?? null);
+                $testedAt = is_array($platformData) ? ($platformData['last_tested_at'] ?? null) : ($platformData->last_tested_at ?? null);
+            }
+            $isVerified = $isConnected && $testStatus === 'ok';
+            $hasError = $isConnected && $testStatus === 'error';
         @endphp
         <div class="col" id="platform-{{ $p['key'] }}">
             <div class="card p-4 h-100">
@@ -155,22 +166,38 @@
                     <div class="flex-grow-1">
                         <div class="text-white fw-semibold">{{ $p['name'] }}</div>
                         <div class="text-secondary small" id="status-text-{{ $p['key'] }}">
-                            @if($isConnected)
-                                <span class="badge bg-success bg-opacity-75 me-1" style="font-size:.6rem;">●</span>Connected
+                            @if($isVerified)
+                                <span class="badge bg-success bg-opacity-75 me-1" style="font-size:.6rem;">●</span>Connected — verified
+                            @elseif($hasError)
+                                <span class="badge bg-danger bg-opacity-75 me-1" style="font-size:.6rem;">●</span>Connected — verification failed
+                            @elseif($isConnected)
+                                <span class="badge bg-warning bg-opacity-75 me-1" style="font-size:.6rem;">●</span>Connected — not verified
                             @else
-                                <span class="text-muted">Not connected</span>
+                                <span class="text-muted"><i class="bi bi-dash-circle me-1"></i>Disconnected</span>
                             @endif
                         </div>
                     </div>
-                    <span class="badge {{ $isConnected ? 'bg-success' : 'bg-secondary' }}" id="badge-{{ $p['key'] }}">
-                        {{ $isConnected ? 'Live' : 'Off' }}
+                    <span class="badge {{ $isVerified ? 'bg-success' : ($hasError ? 'bg-danger' : ($isConnected ? 'bg-warning text-dark' : 'bg-secondary')) }}" id="badge-{{ $p['key'] }}">
+                        {{ $isVerified ? 'Live' : ($hasError ? 'Error' : ($isConnected ? 'Unverified' : 'Off')) }}
                     </span>
                 </div>
+
+                @if($isConnected && $testMessage)
+                    <div class="mb-2 {{ $isVerified ? 'text-success' : 'text-danger' }}" style="font-size:.75rem;">
+                        <i class="bi {{ $isVerified ? 'bi-check-circle' : 'bi-exclamation-triangle' }} me-1"></i>{{ $testMessage }}
+                    </div>
+                @endif
+
+                @if($isConnected && $testedAt)
+                    <div class="text-secondary mb-2" style="font-size:.65rem;">
+                        Last tested: {{ $testedAt instanceof \Carbon\Carbon ? $testedAt->diffForHumans() : $testedAt }}
+                    </div>
+                @endif
 
                 @if($isConnected)
                     <div class="d-flex gap-2 flex-wrap" id="actions-{{ $p['key'] }}">
                         <button class="btn btn-outline-secondary btn-sm" onclick="testPlatform('{{ $p['key'] }}', this)">
-                            <i class="bi bi-arrow-repeat me-1"></i>Test
+                            <i class="bi bi-arrow-repeat me-1"></i>Test Connection
                         </button>
                         <button class="btn btn-outline-danger btn-sm" onclick="disconnectPlatform('{{ $p['key'] }}', '{{ $p['name'] }}', this)">
                             <i class="bi bi-x-circle me-1"></i>Disconnect
@@ -300,6 +327,25 @@ const AI_PROVIDERS = [
     { key: 'openai_compatible', name: 'Custom Endpoint', icon: 'bi-plug',            color: '#8b5cf6', defaultModel: 'default',                    hint: 'Any OpenAI-compatible API (LM Studio, vLLM, text-generation-webui)', needsBaseUrl: true },
 ];
 
+function statusBadge(status) {
+    const map = {
+        active:     { cls: 'bg-success',              icon: 'bi-check-circle-fill', text: 'Connected' },
+        configured: { cls: 'bg-warning text-dark',    icon: 'bi-exclamation-circle', text: 'Not Verified' },
+        error:      { cls: 'bg-danger',               icon: 'bi-x-circle-fill',     text: 'Error' },
+        inactive:   { cls: 'bg-secondary',            icon: 'bi-dash-circle',       text: 'Inactive' },
+    };
+    const s = map[status] || map.inactive;
+    return `<span class="badge ${s.cls}"><i class="bi ${s.icon} me-1"></i>${s.text}</span>`;
+}
+
+function statusDot(status) {
+    const colors = { active: '#10b981', configured: '#f59e0b', error: '#ef4444', inactive: 'rgba(255,255,255,.2)' };
+    const labels = { active: 'Connected', configured: 'Not verified', error: 'Connection error', inactive: 'Not configured' };
+    const c = colors[status] || colors.inactive;
+    const l = labels[status] || 'Not configured';
+    return `<span style="color:${c};">●</span> ${l}`;
+}
+
 async function loadAiModels() {
     const grid = document.getElementById('ai-models-grid');
     try {
@@ -311,12 +357,10 @@ async function loadAiModels() {
         let html = '';
         AI_PROVIDERS.forEach(p => {
             const cfg = modelMap[p.key];
-            const isActive = cfg && cfg.status === 'active';
-            const statusColor = isActive ? '#10b981' : (cfg ? '#f59e0b' : 'rgba(255,255,255,.3)');
-            const statusText = isActive ? 'Active' : (cfg ? (cfg.status || 'Configured') : 'Not configured');
+            const status = cfg ? (cfg.status || 'configured') : 'inactive';
 
             html += `<div class="col"><div class="card p-3 h-100" id="ai-model-${p.key}">`;
-            html += `<div class="d-flex align-items-center gap-3 mb-3">
+            html += `<div class="d-flex align-items-center gap-3 mb-2">
                 <div class="rounded-3 d-flex align-items-center justify-content-center flex-shrink-0"
                      style="width:40px;height:40px;background:${p.color}22;">
                      <i class="bi ${p.icon}" style="color:${p.color};font-size:1.1rem;"></i>
@@ -324,16 +368,24 @@ async function loadAiModels() {
                 <div class="flex-grow-1 overflow-hidden">
                     <div class="text-white small fw-semibold">${p.name}</div>
                     <div class="text-secondary" style="font-size:.7rem;">
-                        <span style="color:${statusColor};">●</span> ${statusText}
+                        ${statusDot(status)}
                         ${cfg && cfg.model_name ? ' · ' + cfg.model_name : ''}
                     </div>
                 </div>
+                <div>${cfg ? statusBadge(status) : ''}</div>
             </div>`;
 
             if (cfg) {
-                html += `<div class="mb-2 text-secondary" style="font-size:.7rem;">Key: ${cfg.masked_key || '••••••'}</div>`;
+                html += `<div class="mb-1 text-secondary" style="font-size:.7rem;">Key: ${cfg.masked_key || '••••••'}</div>`;
+                if (cfg.last_test_message) {
+                    const msgColor = status === 'active' ? 'text-success' : (status === 'error' ? 'text-danger' : 'text-warning');
+                    html += `<div class="${msgColor} mb-2" style="font-size:.7rem;"><i class="bi ${status === 'active' ? 'bi-check-circle' : 'bi-exclamation-triangle'} me-1"></i>${cfg.last_test_message}</div>`;
+                }
+                if (cfg.last_tested_at) {
+                    html += `<div class="text-secondary mb-2" style="font-size:.65rem;">Last tested: ${new Date(cfg.last_tested_at).toLocaleString()}</div>`;
+                }
                 html += `<div class="d-flex gap-1 flex-wrap">
-                    <button class="btn btn-outline-secondary btn-sm" onclick="testAiModel('${p.key}', this)"><i class="bi bi-arrow-repeat me-1"></i>Test</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="test-btn-${p.key}" onclick="testAiModel('${p.key}', this)"><i class="bi bi-arrow-repeat me-1"></i>Test</button>
                     <button class="btn btn-outline-secondary btn-sm" onclick="openAiModelModal('${p.key}','${p.name}','${p.defaultModel}','${p.hint}')"><i class="bi bi-pencil me-1"></i>Edit</button>
                     <button class="btn btn-outline-danger btn-sm" onclick="deleteAiModel('${p.key}', this)"><i class="bi bi-trash"></i></button>
                 </div>`;
@@ -367,13 +419,54 @@ async function saveAiModel(btn) {
     const modelName = document.getElementById('aiModelName').value.trim();
     const baseUrl   = document.getElementById('aiModelBaseUrl').value.trim();
     if (!apiKey && !['ollama'].includes(provider)) { showToast('Please enter an API key', 'warning'); return; }
-    const result = await ajaxPost('/ai-models', { provider, api_key: apiKey || 'local', model_name: modelName || null, base_url: baseUrl || null }, btn);
-    if (result.success) {
-        bootstrap.Modal.getInstance(document.getElementById('aiModelModal')).hide();
-        loadAiModels();
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Connecting…';
+    try {
+        const r = await fetch('/ai-models', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify({ provider, api_key: apiKey || 'local', model_name: modelName || null, base_url: baseUrl || null }),
+        });
+        const result = await r.json();
+        if (result.connected) {
+            showToast(result.message || 'Connected!', 'success');
+        } else if (result.success) {
+            showToast(result.message || 'Saved but not verified.', 'warning');
+        } else {
+            showToast(result.message || 'Failed', 'error');
+        }
+        if (result.success) {
+            bootstrap.Modal.getInstance(document.getElementById('aiModelModal')).hide();
+            loadAiModels();
+        }
+    } catch(e) {
+        showToast('Request failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save & Connect';
     }
 }
-async function testAiModel(provider, btn) { await ajaxPost('/ai-models/' + provider + '/test', {}, btn); }
+async function testAiModel(provider, btn) {
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Testing…';
+    try {
+        const r = await fetch('/ai-models/' + provider + '/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: '{}',
+        });
+        const d = await r.json();
+        showToast(d.message || (d.success ? 'Connected!' : 'Failed'), d.success ? 'success' : 'error');
+        loadAiModels();
+    } catch(e) {
+        showToast('Test failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+    }
+}
 async function deleteAiModel(provider, btn) {
     if (!confirm('Remove this AI model configuration?')) return;
     const result = await ajaxDelete('/ai-models/' + provider, btn);
@@ -385,10 +478,70 @@ async function connectPlatform(platform, btn) {
     const fields = document.querySelectorAll('.platform-field-' + platform);
     const credentials = {};
     fields.forEach(f => { if (f.value.trim()) credentials[f.dataset.field] = f.value.trim(); });
-    const result = await ajaxPost('/platforms/' + platform + '/connect', credentials, btn);
-    if (result.success) setTimeout(() => location.reload(), 800);
+
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Connecting…';
+    try {
+        const r = await fetch('/platforms/' + platform + '/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify(credentials),
+        });
+        const result = await r.json();
+        if (result.verified) {
+            showToast(result.message || 'Connected and verified!', 'success');
+        } else if (result.success) {
+            showToast(result.message || 'Saved but verification failed.', 'warning');
+        } else {
+            showToast(result.message || 'Failed', 'error');
+        }
+        if (result.success) setTimeout(() => location.reload(), 1200);
+    } catch(e) {
+        showToast('Connection failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+    }
 }
-async function testPlatform(platform, btn) { await ajaxPost('/platforms/' + platform + '/test', {}, btn); }
+async function testPlatform(platform, btn) {
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Testing…';
+
+    const statusEl = document.getElementById('status-text-' + platform);
+    if (statusEl) statusEl.innerHTML = '<span class="text-info"><span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>Verifying connection…</span>';
+
+    try {
+        const r = await fetch('/platforms/' + platform + '/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: '{}',
+        });
+        const d = await r.json();
+        showToast(d.message || (d.success ? 'Connected!' : 'Failed'), d.success ? 'success' : 'error');
+
+        // Update status in-place
+        if (statusEl) {
+            if (d.success) {
+                statusEl.innerHTML = '<span class="badge bg-success bg-opacity-75 me-1" style="font-size:.6rem;">●</span>Connected — verified';
+            } else {
+                statusEl.innerHTML = '<span class="badge bg-danger bg-opacity-75 me-1" style="font-size:.6rem;">●</span>Error: ' + (d.message || 'Test failed');
+            }
+        }
+        const badgeEl = document.getElementById('badge-' + platform);
+        if (badgeEl) {
+            badgeEl.className = d.success ? 'badge bg-success' : 'badge bg-danger';
+            badgeEl.textContent = d.success ? 'Live' : 'Error';
+        }
+    } catch(e) {
+        showToast('Test failed: ' + e.message, 'error');
+        if (statusEl) statusEl.innerHTML = '<span class="badge bg-danger bg-opacity-75 me-1" style="font-size:.6rem;">●</span>Test error';
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+    }
+}
 async function disconnectPlatform(platform, name, btn) {
     if (!confirm('Disconnect ' + name + '? You can reconnect later.')) return;
     const result = await ajaxPost('/platforms/' + platform + '/disconnect', {}, btn);
@@ -400,22 +553,64 @@ async function saveTelegramConfig(btn) {
     const token  = document.getElementById('telegram_bot_token').value.trim();
     const chatId = document.getElementById('telegram_admin_chat_id').value.trim();
     if (!token) { showToast('Please enter a bot token', 'warning'); return; }
-    const result = await ajaxPost('/platforms/telegram/configure', { telegram_bot_token: token, telegram_admin_chat_id: chatId }, btn);
-    if (result.success) {
+
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Connecting…';
+
+    try {
+        const r = await fetch('/platforms/telegram/configure', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify({ telegram_bot_token: token, telegram_admin_chat_id: chatId }),
+        });
+        const result = await r.json();
         const badge = document.getElementById('telegram-status-badge');
-        badge.className = 'badge bg-success';
-        badge.textContent = 'Connected';
+        if (result.verified) {
+            badge.className = 'badge bg-success';
+            badge.innerHTML = '<i class="bi bi-check-circle me-1"></i>Connected';
+            showToast(result.message || 'Telegram connected!', 'success');
+        } else {
+            badge.className = 'badge bg-warning text-dark';
+            badge.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>Not Verified';
+            showToast(result.message || 'Saved but not verified.', 'warning');
+        }
         badge.classList.remove('d-none');
+    } catch(e) {
+        showToast('Failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
     }
 }
 async function testTelegramToken(btn) {
     const token = document.getElementById('telegram_bot_token').value.trim();
     if (!token) { showToast('Enter a token first', 'warning'); return; }
-    const result = await ajaxPost('/platforms/telegram/test', { telegram_bot_token: token }, btn);
-    const badge = document.getElementById('telegram-status-badge');
-    badge.className = result.success ? 'badge bg-success' : 'badge bg-danger';
-    badge.innerHTML = result.success ? '<i class="bi bi-check-circle me-1"></i>Valid' : '<i class="bi bi-x-circle me-1"></i>Invalid';
-    badge.classList.remove('d-none');
+
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Testing…';
+
+    try {
+        const r = await fetch('/platforms/telegram/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify({ telegram_bot_token: token }),
+        });
+        const result = await r.json();
+        const badge = document.getElementById('telegram-status-badge');
+        badge.className = result.success ? 'badge bg-success' : 'badge bg-danger';
+        badge.innerHTML = result.success
+            ? '<i class="bi bi-check-circle me-1"></i>' + (result.message || 'Valid')
+            : '<i class="bi bi-x-circle me-1"></i>' + (result.message || 'Invalid');
+        badge.classList.remove('d-none');
+        showToast(result.message || (result.success ? 'Token valid!' : 'Invalid token'), result.success ? 'success' : 'error');
+    } catch(e) {
+        showToast('Test failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+    }
 }
 
 document.addEventListener('DOMContentLoaded', loadAiModels);
@@ -426,5 +621,6 @@ document.addEventListener('DOMContentLoaded', loadAiModels);
 .status-dot.green  { background:#10b981; box-shadow:0 0 6px rgba(16,185,129,.5); }
 .status-dot.yellow { background:#f59e0b; }
 .status-dot.gray   { background:rgba(255,255,255,.2); }
+.status-dot.red    { background:#ef4444; box-shadow:0 0 6px rgba(239,68,68,.4); }
 </style>
 @endsection
