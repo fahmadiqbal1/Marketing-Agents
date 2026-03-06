@@ -437,17 +437,20 @@ class DashboardController extends Controller
 
     public function listAiModels()
     {
-        $models = AiModelConfig::where('business_id', $this->businessId())->get();
+        $models = AiModelConfig::where('business_id', $this->businessId())->orderBy('id')->get();
         $result = $models->map(function ($m) {
             return [
-                'id'              => $m->id,
-                'provider'        => $m->provider,
-                'model_name'      => $m->model_name,
-                'is_default'      => $m->is_default,
-                'is_active'       => $m->is_active,
-                'status'          => $m->status,
-                'masked_key'      => $m->masked_key,
-                'last_tested_at'  => $m->last_tested_at?->toIso8601String(),
+                'id'               => $m->id,
+                'provider'         => $m->provider,
+                'display_name'     => $m->display_name,
+                'model_name'       => $m->model_name,
+                'base_url'         => $m->base_url,
+                'is_default'       => $m->is_default,
+                'is_active'        => $m->is_active,
+                'is_orchestrator'  => $m->is_orchestrator,
+                'status'           => $m->status,
+                'masked_key'       => $m->masked_key,
+                'last_tested_at'   => $m->last_tested_at?->toIso8601String(),
                 'last_test_status' => $m->last_test_status,
                 'last_test_message' => $m->last_test_message,
             ];
@@ -455,51 +458,119 @@ class DashboardController extends Controller
         return response()->json(['success' => true, 'models' => $result]);
     }
 
+    /**
+     * Create a new AI model config.
+     * Allows multiple custom endpoints per provider (no unique constraint enforced here).
+     */
     public function saveAiModel(Request $request)
     {
-        $request->validate(['provider'=>'required|string|max:50','api_key'=>'required|string|max:500','model_name'=>'nullable|string|max:100']);
+        $validProviders = ['openai', 'google_gemini', 'anthropic', 'mistral', 'deepseek', 'groq', 'ollama', 'openai_compatible'];
+        $request->validate([
+            'provider'     => 'required|string|in:' . implode(',', $validProviders),
+            'api_key'      => 'nullable|string|max:500',
+            'model_name'   => 'nullable|string|max:200',
+            'base_url'     => 'nullable|url|max:500',
+            'display_name' => 'nullable|string|max:150',
+        ]);
 
-        $provider = $request->input('provider');
-        $apiKey = $request->input('api_key');
-        $modelName = $request->input('model_name');
-        $baseUrl = $request->input('base_url');
+        $provider    = $request->input('provider');
+        $apiKey      = $request->input('api_key');
+        $modelName   = $request->input('model_name');
+        $baseUrl     = $request->input('base_url');
+        $displayName = $request->input('display_name');
 
-        // Actually test the API key before saving
-        $tester = new AiProviderTestService();
-        $testResult = $tester->test($provider, $apiKey, $modelName, $baseUrl);
+        // Require API key for non-local providers
+        if (! in_array($provider, ['ollama']) && empty($apiKey)) {
+            return response()->json(['success' => false, 'message' => 'API key is required for ' . $provider . '.'], 422);
+        }
 
-        $model = AiModelConfig::updateOrCreate(
-            ['business_id' => $this->businessId(), 'provider' => $provider],
-            [
-                'api_key'           => $apiKey,
-                'model_name'        => $modelName,
-                'base_url'          => $baseUrl,
-                'is_active'         => true,
-                'last_tested_at'    => now(),
-                'last_test_status'  => $testResult['success'] ? 'ok' : 'error',
-                'last_test_message' => $testResult['message'] ?? null,
-            ]
-        );
+        // Test the connection
+        $tester     = new AiProviderTestService();
+        $testResult = $tester->test($provider, $apiKey ?? 'local', $modelName, $baseUrl);
+
+        $model = AiModelConfig::create([
+            'business_id'       => $this->businessId(),
+            'provider'          => $provider,
+            'display_name'      => $displayName,
+            'api_key'           => $apiKey ?? 'local',
+            'model_name'        => $modelName,
+            'base_url'          => $baseUrl,
+            'is_active'         => true,
+            'last_tested_at'    => now(),
+            'last_test_status'  => $testResult['success'] ? 'ok' : 'error',
+            'last_test_message' => $testResult['message'] ?? null,
+        ]);
 
         return response()->json([
             'success'      => true,
+            'id'           => $model->id,
             'connected'    => $testResult['success'],
             'message'      => $testResult['success']
-                ? ($testResult['message'] ?? ucfirst($provider) . ' connected successfully.')
+                ? ($testResult['message'] ?? ($displayName ?: ucfirst($provider)) . ' connected successfully.')
                 : 'Saved, but connection test failed: ' . ($testResult['message'] ?? 'Unknown error'),
             'test_status'  => $testResult['success'] ? 'ok' : 'error',
             'test_message' => $testResult['message'] ?? null,
         ]);
     }
 
-    public function testAiModel(Request $request, string $provider)
+    /**
+     * Update an existing AI model config by ID.
+     */
+    public function updateAiModel(Request $request, int $id)
     {
-        $model = AiModelConfig::where('business_id', $this->businessId())->where('provider', $provider)->first();
-        if (!$model) return response()->json(['success' => false, 'message' => 'Provider not configured.']);
+        $model = AiModelConfig::where('business_id', $this->businessId())->where('id', $id)->firstOrFail();
 
-        // Actually test the API key
+        $request->validate([
+            'api_key'      => 'nullable|string|max:500',
+            'model_name'   => 'nullable|string|max:200',
+            'base_url'     => 'nullable|url|max:500',
+            'display_name' => 'nullable|string|max:150',
+            'is_active'    => 'nullable|boolean',
+        ]);
+
+        $apiKey   = $request->input('api_key');
+        $baseUrl  = $request->input('base_url');
+        $updates  = array_filter([
+            'display_name' => $request->input('display_name'),
+            'model_name'   => $request->input('model_name'),
+            'base_url'     => $baseUrl,
+            'is_active'    => $request->has('is_active') ? (bool) $request->input('is_active') : null,
+        ], fn($v) => $v !== null);
+
+        if ($apiKey) {
+            $updates['api_key'] = $apiKey;
+        }
+
+        // Re-test if key or url changed
+        if ($apiKey || $baseUrl) {
+            $tester     = new AiProviderTestService();
+            $testResult = $tester->test($model->provider, $apiKey ?? $model->api_key, $request->input('model_name') ?? $model->model_name, $baseUrl ?? $model->base_url);
+            $updates['last_tested_at']    = now();
+            $updates['last_test_status']  = $testResult['success'] ? 'ok' : 'error';
+            $updates['last_test_message'] = $testResult['message'] ?? null;
+        }
+
+        $model->update($updates);
+
+        return response()->json([
+            'success'   => true,
+            'message'   => 'AI model updated.',
+            'connected' => $model->last_test_status === 'ok',
+        ]);
+    }
+
+    /**
+     * Test a specific AI model config by ID.
+     */
+    public function testAiModel(Request $request, int $id)
+    {
+        $model = AiModelConfig::where('business_id', $this->businessId())->where('id', $id)->first();
+        if (! $model) {
+            return response()->json(['success' => false, 'message' => 'AI model not found.'], 404);
+        }
+
         $tester = new AiProviderTestService();
-        $result = $tester->test($provider, $model->api_key, $model->model_name, $model->base_url);
+        $result = $tester->test($model->provider, $model->api_key, $model->model_name, $model->base_url);
 
         $model->update([
             'last_tested_at'    => now(),
@@ -513,10 +584,53 @@ class DashboardController extends Controller
         ]);
     }
 
-    public function deleteAiModel(Request $request, string $provider)
+    /**
+     * Delete a specific AI model config by ID.
+     */
+    public function deleteAiModel(Request $request, int $id)
     {
-        AiModelConfig::where('business_id',$this->businessId())->where('provider',$provider)->delete();
-        return response()->json(['success'=>true,'message'=>'AI model removed.']);
+        $deleted = AiModelConfig::where('business_id', $this->businessId())->where('id', $id)->delete();
+        if (! $deleted) {
+            return response()->json(['success' => false, 'message' => 'AI model not found.'], 404);
+        }
+        return response()->json(['success' => true, 'message' => 'AI model removed.']);
+    }
+
+    // =========================================================================
+    // ORCHESTRATOR
+    // =========================================================================
+
+    public function getOrchestrator()
+    {
+        $svc    = new \App\Services\OrchestratorService($this->businessId());
+        $status = $svc->getStatus();
+        return response()->json(['success' => true, 'orchestrator' => $status]);
+    }
+
+    public function configureOrchestrator(Request $request)
+    {
+        $request->validate(['model_id' => 'required|integer']);
+        $svc     = new \App\Services\OrchestratorService($this->businessId());
+        $success = $svc->setOrchestrator((int) $request->input('model_id'));
+        if (! $success) {
+            return response()->json(['success' => false, 'message' => 'Model not found or not accessible.'], 404);
+        }
+        return response()->json(['success' => true, 'message' => 'Orchestrator configured successfully.']);
+    }
+
+    public function orchestratorPlan(Request $request)
+    {
+        $request->validate(['goal' => 'required|string|max:1000']);
+        $svc    = new \App\Services\OrchestratorService($this->businessId());
+        $result = $svc->planTasks($request->input('goal'));
+        return response()->json($result);
+    }
+
+    public function orchestratorSkills()
+    {
+        $svc     = new \App\Services\OrchestratorService($this->businessId());
+        $profile = $svc->getSkillProfile();
+        return response()->json(['success' => true, 'skills' => $profile, 'domains' => \App\Services\OrchestratorService::SKILL_DOMAINS]);
     }
 
     public function listBusinesses()

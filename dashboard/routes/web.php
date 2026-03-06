@@ -42,11 +42,18 @@ Route::middleware(['auth'])->group(function () {
     Route::post('/platforms/telegram/configure',    [DashboardController::class, 'configureTelegram'])->name('dashboard.platforms.telegram.configure');
     Route::post('/platforms/telegram/test',         [DashboardController::class, 'testTelegram'])->name('dashboard.platforms.telegram.test');
 
-    // AI Models
-    Route::get('/ai-models',                  [DashboardController::class, 'listAiModels'])->name('dashboard.ai-models');
-    Route::post('/ai-models',                 [DashboardController::class, 'saveAiModel'])->name('dashboard.ai-models.save');
-    Route::post('/ai-models/{provider}/test', [DashboardController::class, 'testAiModel'])->name('dashboard.ai-models.test');
-    Route::delete('/ai-models/{provider}',    [DashboardController::class, 'deleteAiModel'])->name('dashboard.ai-models.delete');
+    // AI Models — ID-based CRUD (allows multiple custom endpoints per provider)
+    Route::get('/ai-models',              [DashboardController::class, 'listAiModels'])->name('dashboard.ai-models');
+    Route::post('/ai-models',             [DashboardController::class, 'saveAiModel'])->name('dashboard.ai-models.save');
+    Route::put('/ai-models/{id}',         [DashboardController::class, 'updateAiModel'])->name('dashboard.ai-models.update');
+    Route::post('/ai-models/{id}/test',   [DashboardController::class, 'testAiModel'])->name('dashboard.ai-models.test');
+    Route::delete('/ai-models/{id}',      [DashboardController::class, 'deleteAiModel'])->name('dashboard.ai-models.delete');
+
+    // Orchestrator
+    Route::get('/orchestrator',           [DashboardController::class, 'getOrchestrator'])->name('dashboard.orchestrator');
+    Route::post('/orchestrator/configure',[DashboardController::class, 'configureOrchestrator'])->name('dashboard.orchestrator.configure');
+    Route::post('/orchestrator/plan',     [DashboardController::class, 'orchestratorPlan'])->name('dashboard.orchestrator.plan');
+    Route::get('/orchestrator/skills',    [DashboardController::class, 'orchestratorSkills'])->name('dashboard.orchestrator.skills');
 
     // Strategy, Settings, Calendar
     Route::get('/strategy', [DashboardController::class, 'strategy'])->name('dashboard.strategy');

@@ -756,20 +756,22 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/ai-models', function (Request $request) {
         $bid = $request->user()->business_id;
-        $models = \App\Models\AiModelConfig::where('business_id', $bid)->get();
+        $models = \App\Models\AiModelConfig::where('business_id', $bid)->orderBy('id')->get();
         $result = $models->map(function ($m) {
             return [
-                'id'                => $m->id,
-                'provider'          => $m->provider,
-                'model_name'        => $m->model_name,
-                'base_url'          => $m->base_url,
-                'is_default'        => $m->is_default,
-                'is_active'         => $m->is_active,
-                'status'            => $m->status,
-                'masked_key'        => $m->masked_key,
-                'last_tested_at'    => $m->last_tested_at?->toIso8601String(),
-                'last_test_status'  => $m->last_test_status,
-                'last_test_message' => $m->last_test_message,
+                'id'               => $m->id,
+                'provider'         => $m->provider,
+                'display_name'     => $m->display_name,
+                'model_name'       => $m->model_name,
+                'base_url'         => $m->base_url,
+                'is_default'       => $m->is_default,
+                'is_active'        => $m->is_active,
+                'is_orchestrator'  => $m->is_orchestrator,
+                'status'           => $m->status,
+                'masked_key'       => $m->masked_key,
+                'last_tested_at'   => $m->last_tested_at?->toIso8601String(),
+                'last_test_status' => $m->last_test_status,
+                'last_test_message'=> $m->last_test_message,
             ];
         });
         return response()->json(['success' => true, 'models' => $result]);
@@ -787,28 +789,34 @@ Route::middleware('auth:sanctum')->group(function () {
             ], 400);
         }
 
-        $apiKey = $request->input('api_key');
-        $modelName = $request->input('model_name');
-        $baseUrl = $request->input('base_url');
+        $apiKey      = $request->input('api_key');
+        $modelName   = $request->input('model_name');
+        $baseUrl     = $request->input('base_url');
+        $displayName = $request->input('display_name');
 
-        // Actually test the API key
-        $tester = new \App\Services\AiProviderTestService();
-        $testResult = $tester->test($provider, $apiKey, $modelName, $baseUrl);
+        if ($provider !== 'ollama' && empty($apiKey)) {
+            return response()->json(['success' => false, 'message' => 'API key is required.'], 422);
+        }
 
-        \App\Models\AiModelConfig::updateOrCreate(
-            ['business_id' => $bid, 'provider' => $provider],
-            [
-                'api_key'           => $apiKey,
-                'model_name'        => $modelName,
-                'base_url'          => $baseUrl,
-                'is_active'         => true,
-                'last_tested_at'    => now(),
-                'last_test_status'  => $testResult['success'] ? 'ok' : 'error',
-                'last_test_message' => $testResult['message'] ?? null,
-            ]
-        );
+        $tester     = new \App\Services\AiProviderTestService();
+        $testResult = $tester->test($provider, $apiKey ?? 'local', $modelName, $baseUrl);
+
+        $model = \App\Models\AiModelConfig::create([
+            'business_id'       => $bid,
+            'provider'          => $provider,
+            'display_name'      => $displayName,
+            'api_key'           => $apiKey ?? 'local',
+            'model_name'        => $modelName,
+            'base_url'          => $baseUrl,
+            'is_active'         => true,
+            'last_tested_at'    => now(),
+            'last_test_status'  => $testResult['success'] ? 'ok' : 'error',
+            'last_test_message' => $testResult['message'] ?? null,
+        ]);
+
         return response()->json([
             'success'      => true,
+            'id'           => $model->id,
             'connected'    => $testResult['success'],
             'message'      => $testResult['success']
                 ? ($testResult['message'] ?? 'AI model saved and verified.')
@@ -816,13 +824,41 @@ Route::middleware('auth:sanctum')->group(function () {
         ]);
     })->name('api.ai-models.save');
 
-    Route::post('/ai-models/{provider}/test', function (Request $request, string $provider) {
-        $bid = $request->user()->business_id;
-        $model = \App\Models\AiModelConfig::where('business_id', $bid)->where('provider', $provider)->first();
-        if (!$model) return response()->json(['success' => false, 'message' => 'Provider not configured.']);
+    Route::put('/ai-models/{id}', function (Request $request, int $id) {
+        $bid   = $request->user()->business_id;
+        $model = \App\Models\AiModelConfig::where('business_id', $bid)->where('id', $id)->firstOrFail();
+
+        $updates = array_filter([
+            'display_name' => $request->input('display_name'),
+            'model_name'   => $request->input('model_name'),
+            'base_url'     => $request->input('base_url'),
+        ], fn($v) => $v !== null);
+        if ($request->input('api_key')) $updates['api_key'] = $request->input('api_key');
+
+        if ($request->input('api_key') || $request->input('base_url')) {
+            $tester = new \App\Services\AiProviderTestService();
+            $result = $tester->test(
+                $model->provider,
+                $request->input('api_key') ?? $model->api_key,
+                $request->input('model_name') ?? $model->model_name,
+                $request->input('base_url') ?? $model->base_url
+            );
+            $updates['last_tested_at']    = now();
+            $updates['last_test_status']  = $result['success'] ? 'ok' : 'error';
+            $updates['last_test_message'] = $result['message'] ?? null;
+        }
+
+        $model->update($updates);
+        return response()->json(['success' => true, 'message' => 'AI model updated.']);
+    })->name('api.ai-models.update');
+
+    Route::post('/ai-models/{id}/test', function (Request $request, int $id) {
+        $bid   = $request->user()->business_id;
+        $model = \App\Models\AiModelConfig::where('business_id', $bid)->where('id', $id)->first();
+        if (!$model) return response()->json(['success' => false, 'message' => 'Model not found.'], 404);
 
         $tester = new \App\Services\AiProviderTestService();
-        $result = $tester->test($provider, $model->api_key, $model->model_name, $model->base_url);
+        $result = $tester->test($model->provider, $model->api_key, $model->model_name, $model->base_url);
 
         $model->update([
             'last_tested_at'    => now(),
@@ -836,11 +872,40 @@ Route::middleware('auth:sanctum')->group(function () {
         ]);
     })->name('api.ai-models.test');
 
-    Route::delete('/ai-models/{provider}', function (Request $request, string $provider) {
-        $bid = $request->user()->business_id;
-        \App\Models\AiModelConfig::where('business_id', $bid)->where('provider', $provider)->delete();
+    Route::delete('/ai-models/{id}', function (Request $request, int $id) {
+        $bid     = $request->user()->business_id;
+        $deleted = \App\Models\AiModelConfig::where('business_id', $bid)->where('id', $id)->delete();
+        if (!$deleted) return response()->json(['success' => false, 'message' => 'Model not found.'], 404);
         return response()->json(['success' => true, 'message' => 'AI model removed.']);
     })->name('api.ai-models.delete');
+
+    // Orchestrator API routes
+    Route::get('/orchestrator', function (Request $request) {
+        $svc = new \App\Services\OrchestratorService($request->user()->business_id);
+        return response()->json(['success' => true, 'orchestrator' => $svc->getStatus()]);
+    })->name('api.orchestrator');
+
+    Route::post('/orchestrator/configure', function (Request $request) {
+        $request->validate(['model_id' => 'required|integer']);
+        $svc     = new \App\Services\OrchestratorService($request->user()->business_id);
+        $success = $svc->setOrchestrator((int) $request->input('model_id'));
+        return $success
+            ? response()->json(['success' => true, 'message' => 'Orchestrator configured.'])
+            : response()->json(['success' => false, 'message' => 'Model not found.'], 404);
+    })->name('api.orchestrator.configure');
+
+    Route::post('/orchestrator/plan', function (Request $request) {
+        $request->validate(['goal' => 'required|string|max:1000']);
+        $svc    = new \App\Services\OrchestratorService($request->user()->business_id);
+        $result = $svc->planTasks($request->input('goal'));
+        return response()->json($result);
+    })->name('api.orchestrator.plan');
+
+    Route::get('/orchestrator/skills', function (Request $request) {
+        $svc     = new \App\Services\OrchestratorService($request->user()->business_id);
+        $profile = $svc->getSkillProfile();
+        return response()->json(['success' => true, 'skills' => $profile, 'domains' => \App\Services\OrchestratorService::SKILL_DOMAINS]);
+    })->name('api.orchestrator.skills');
 
     // ─────────────────────────────────────────────────────────────────────
     // BUSINESS PROFILE

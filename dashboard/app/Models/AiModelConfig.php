@@ -8,14 +8,16 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class AiModelConfig extends Model
 {
     protected $fillable = [
-        'business_id', 'provider', 'api_key', 'model_name', 'base_url', 'is_default', 'is_active',
+        'business_id', 'provider', 'display_name', 'api_key', 'model_name', 'base_url',
+        'is_default', 'is_active', 'is_orchestrator',
         'last_tested_at', 'last_test_status', 'last_test_message',
     ];
 
     protected $casts = [
-        'is_default'     => 'boolean',
-        'is_active'      => 'boolean',
-        'last_tested_at' => 'datetime',
+        'is_default'      => 'boolean',
+        'is_active'       => 'boolean',
+        'is_orchestrator' => 'boolean',
+        'last_tested_at'  => 'datetime',
     ];
 
     protected $hidden = ['api_key'];
