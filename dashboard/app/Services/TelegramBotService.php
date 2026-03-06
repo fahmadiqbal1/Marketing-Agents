@@ -413,7 +413,7 @@ class TelegramBotService
         $url = "https://api.telegram.org/file/bot{$this->bot->bot_token}/{$telegramPath}";
 
         try {
-            $content = Http::get($url)->body();
+            $content = self::telegramHttp()->get($url)->body();
 
             // Generate local path
             $extension = pathinfo($telegramPath, PATHINFO_EXTENSION);
@@ -482,12 +482,42 @@ class TelegramBotService
         $url = self::API_BASE . $this->bot->bot_token . '/' . $method;
 
         try {
-            $response = Http::post($url, $params)->json();
+            $response = self::telegramHttp()->post($url, $params)->json();
             return $response ?? ['ok' => false];
         } catch (\Exception $e) {
             Log::error("Telegram API error: " . $e->getMessage());
             return ['ok' => false, 'error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * Build an HTTP client for Telegram API with optional proxy support.
+     *
+     * Uses the same proxy settings as the dashboard Telegram configuration
+     * (TELEGRAM_PROXY_URL, TELEGRAM_PROXY_USERNAME, TELEGRAM_PROXY_PASSWORD).
+     */
+    public static function telegramHttp(): \Illuminate\Http\Client\PendingRequest
+    {
+        $client = Http::timeout(15);
+
+        $proxyUrl = config('services.telegram.proxy_url');
+        if (!empty($proxyUrl)) {
+            $options = ['proxy' => $proxyUrl];
+
+            $proxyUser = config('services.telegram.proxy_username');
+            $proxyPass = config('services.telegram.proxy_password');
+            if ($proxyUser && $proxyPass) {
+                $parsed = parse_url($proxyUrl);
+                $scheme = ($parsed['scheme'] ?? 'socks5') . '://';
+                $host   = $parsed['host'] ?? $proxyUrl;
+                $port   = isset($parsed['port']) ? ':' . $parsed['port'] : '';
+                $options['proxy'] = "{$scheme}{$proxyUser}:{$proxyPass}@{$host}{$port}";
+            }
+
+            $client = $client->withOptions($options);
+        }
+
+        return $client;
     }
 
     private function extractFileId(array $message, string $mediaType): ?string

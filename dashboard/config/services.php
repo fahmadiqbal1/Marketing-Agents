@@ -45,4 +45,10 @@ return [
         'model' => env('OPENAI_MODEL', 'gpt-4o-mini'),
     ],
 
+    'telegram' => [
+        'proxy_url'      => env('TELEGRAM_PROXY_URL'),       // e.g. socks5://127.0.0.1:1080  or http://proxy:8080
+        'proxy_username' => env('TELEGRAM_PROXY_USERNAME'),
+        'proxy_password' => env('TELEGRAM_PROXY_PASSWORD'),
+    ],
+
 ];

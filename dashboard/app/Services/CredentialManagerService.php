@@ -153,14 +153,21 @@ class CredentialManagerService
     public function saveCredentials(string $platform, array $credentials): array
     {
         $connection = SocialPlatform::where('business_id', $this->businessId)
-            ->where('platform', $platform)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->first();
 
         if (!$connection) {
             $connection = new SocialPlatform([
                 'business_id' => $this->businessId,
                 'platform' => $platform,
+                'key' => $platform,
             ]);
+        } else {
+            // Ensure both identifiers are set
+            $connection->platform = $platform;
+            $connection->key = $platform;
         }
 
         // Encrypt token fields
@@ -178,6 +185,8 @@ class CredentialManagerService
         $connection->extra_data = !empty($extras) ? json_encode($extras) : null;
         $connection->scopes = $credentials['scopes'] ?? null;
         $connection->status = 'active';
+        $connection->connected = true;
+        $connection->name = $connection->name ?: ucfirst($platform);
         $connection->connected_at = now();
         $connection->last_error = null;
 
@@ -192,7 +201,9 @@ class CredentialManagerService
     public function getCredentials(string $platform): ?array
     {
         $connection = SocialPlatform::where('business_id', $this->businessId)
-            ->where('platform', $platform)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->where('status', 'active')
             ->first();
 
@@ -200,24 +211,40 @@ class CredentialManagerService
             return null;
         }
 
-        $result = [
-            'access_token' => $this->encryption->decrypt($connection->access_token ?? ''),
-            'refresh_token' => $this->encryption->decrypt($connection->refresh_token ?? ''),
-            'client_id' => $this->encryption->decrypt($connection->client_id ?? ''),
-            'client_secret' => $this->encryption->decrypt($connection->client_secret ?? ''),
-        ];
+        // Prefer individual encrypted columns when available
+        $hasIndividualCols = !empty($connection->access_token)
+            || !empty($connection->client_id)
+            || !empty($connection->refresh_token);
 
-        // Merge extras
-        if ($connection->extra_data) {
-            try {
-                $extras = json_decode($connection->extra_data, true);
-                $result = array_merge($result, $extras);
-            } catch (\Exception $e) {
-                // Ignore JSON errors
+        if ($hasIndividualCols) {
+            $result = [
+                'access_token' => $this->encryption->decrypt($connection->access_token ?? ''),
+                'refresh_token' => $this->encryption->decrypt($connection->refresh_token ?? ''),
+                'client_id' => $this->encryption->decrypt($connection->client_id ?? ''),
+                'client_secret' => $this->encryption->decrypt($connection->client_secret ?? ''),
+            ];
+
+            // Merge extras
+            if ($connection->extra_data) {
+                try {
+                    $extras = json_decode($connection->extra_data, true);
+                    if (is_array($extras)) {
+                        $result = array_merge($result, $extras);
+                    }
+                } catch (\Exception $e) {
+                    // Ignore JSON errors
+                }
             }
+
+            return $result;
         }
 
-        return $result;
+        // Fall back to legacy 'credentials' JSON column
+        if (!empty($connection->credentials) && is_array($connection->credentials)) {
+            return $connection->credentials;
+        }
+
+        return null;
     }
 
     /**
@@ -233,14 +260,17 @@ class CredentialManagerService
             $extras = [];
             if ($conn->extra_data) {
                 try {
-                    $extras = json_decode($conn->extra_data, true);
+                    $extras = json_decode($conn->extra_data, true) ?: [];
                 } catch (\Exception $e) {
                     // Ignore
                 }
             }
 
-            $connected[$conn->platform] = [
-                'status' => $conn->status,
+            // Use platform column if set, otherwise fall back to key
+            $platformKey = $conn->platform ?: $conn->key;
+
+            $connected[$platformKey] = [
+                'status' => $conn->status ?? ($conn->connected ? 'active' : 'revoked'),
                 'connected_at' => $conn->connected_at?->toIso8601String(),
                 'last_used_at' => $conn->last_used_at?->toIso8601String(),
                 'expires_at' => $conn->expires_at?->toIso8601String(),
@@ -276,7 +306,9 @@ class CredentialManagerService
     public function disconnect(string $platform): bool
     {
         $connection = SocialPlatform::where('business_id', $this->businessId)
-            ->where('platform', $platform)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->first();
 
         if (!$connection) {
@@ -284,6 +316,7 @@ class CredentialManagerService
         }
 
         $connection->status = 'revoked';
+        $connection->connected = false;
         $connection->access_token = null;
         $connection->refresh_token = null;
         $connection->client_id = null;
@@ -314,6 +347,9 @@ class CredentialManagerService
                 'linkedin' => $this->testLinkedIn($creds),
                 'tiktok' => $this->testTikTok($creds),
                 'twitter' => $this->testTwitter($creds),
+                'telegram' => $this->testTelegramBot($creds),
+                'pinterest' => $this->testPinterest($creds),
+                'threads' => $this->testThreads($creds),
                 default => ['success' => true, 'message' => "Credentials saved (no test available for {$platform})"],
             };
         } catch (\Exception $e) {
@@ -445,6 +481,70 @@ class CredentialManagerService
         return ['success' => false, 'message' => 'Missing access token or access token secret'];
     }
 
+    protected function testTelegramBot(array $creds): array
+    {
+        $token = $creds['bot_token'] ?? $creds['access_token'] ?? '';
+        if (empty($token)) {
+            return ['success' => false, 'message' => 'No bot token provided'];
+        }
+
+        $response = \App\Http\Controllers\DashboardController::telegramHttp()
+            ->get("https://api.telegram.org/bot{$token}/getMe");
+
+        if ($response->successful() && ($response->json('ok') === true)) {
+            $botInfo = $response->json('result', []);
+            return [
+                'success' => true,
+                'message' => 'Connected to @' . ($botInfo['username'] ?? 'bot'),
+                'details' => $botInfo,
+            ];
+        }
+
+        return ['success' => false, 'message' => 'Telegram API error: ' . ($response->json('description') ?? $response->body())];
+    }
+
+    protected function testPinterest(array $creds): array
+    {
+        if (empty($creds['access_token'])) {
+            return ['success' => false, 'message' => 'Missing access token'];
+        }
+
+        $response = Http::timeout(10)
+            ->withHeaders(['Authorization' => 'Bearer ' . $creds['access_token']])
+            ->get('https://api.pinterest.com/v5/user_account');
+
+        if ($response->successful()) {
+            $data = $response->json();
+            $name = $data['username'] ?? $data['business_name'] ?? 'Pinterest User';
+            return ['success' => true, 'message' => "Connected as: {$name}"];
+        }
+
+        return ['success' => false, 'message' => 'Pinterest API error: ' . $response->body()];
+    }
+
+    protected function testThreads(array $creds): array
+    {
+        $userId = $creds['user_id'] ?? 'me';
+        if (empty($creds['access_token'])) {
+            return ['success' => false, 'message' => 'Missing access token'];
+        }
+
+        $response = Http::timeout(10)->get("https://graph.threads.net/v1.0/{$userId}", [
+            'access_token' => $creds['access_token'],
+            'fields' => 'id,username',
+        ]);
+
+        if ($response->successful()) {
+            $data = $response->json();
+            return [
+                'success' => true,
+                'message' => 'Connected as @' . ($data['username'] ?? 'unknown'),
+            ];
+        }
+
+        return ['success' => false, 'message' => 'Threads API error: ' . $response->body()];
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
     /**
@@ -461,7 +561,9 @@ class CredentialManagerService
     public function markCredentialsUsed(string $platform): void
     {
         SocialPlatform::where('business_id', $this->businessId)
-            ->where('platform', $platform)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->update(['last_used_at' => now()]);
     }
 
@@ -471,7 +573,9 @@ class CredentialManagerService
     public function recordError(string $platform, string $error): void
     {
         SocialPlatform::where('business_id', $this->businessId)
-            ->where('platform', $platform)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->update([
                 'last_error' => $error,
                 'status' => 'error',
@@ -484,7 +588,9 @@ class CredentialManagerService
     public function clearError(string $platform): void
     {
         SocialPlatform::where('business_id', $this->businessId)
-            ->where('platform', $platform)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->update([
                 'last_error' => null,
                 'status' => 'active',
