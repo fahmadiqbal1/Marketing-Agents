@@ -120,24 +120,35 @@ class DashboardController extends Controller
     public function connectPlatform(Request $request, string $platform)
     {
         $credentials = $request->except(['_token']);
-        $sp = SocialPlatform::updateOrCreate(
-            ['business_id' => $this->businessId(), 'key' => $platform],
-            ['name' => ucfirst($platform), 'connected' => true, 'credentials' => $credentials]
-        );
+        $credManager = new CredentialManagerService($this->businessId());
+
+        // Save via CredentialManagerService (encrypts into individual columns)
+        $credManager->saveCredentials($platform, $credentials);
+
+        // Also keep the legacy 'key' and 'connected' columns in sync
+        $sp = SocialPlatform::where('business_id', $this->businessId())
+            ->where('platform', $platform)
+            ->first();
+
+        if ($sp) {
+            $sp->update([
+                'key'       => $platform,
+                'name'      => ucfirst($platform),
+                'connected' => true,
+            ]);
+        }
 
         // Auto-test the connection after saving
         $testResult = null;
         try {
-            $credManager = new CredentialManagerService($this->businessId());
             $testResult = $credManager->testConnection($platform);
-            $sp->update([
+            $sp?->update([
                 'last_tested_at'    => now(),
                 'last_test_status'  => $testResult['success'] ? 'ok' : 'error',
                 'last_test_message' => $testResult['message'] ?? null,
             ]);
         } catch (\Exception $e) {
-            // Connection saved but test failed — still mark as connected
-            $sp->update([
+            $sp?->update([
                 'last_tested_at'    => now(),
                 'last_test_status'  => 'error',
                 'last_test_message' => $e->getMessage(),
@@ -161,8 +172,14 @@ class DashboardController extends Controller
 
     public function testPlatform(Request $request, string $platform)
     {
-        $sp = SocialPlatform::where('business_id', $this->businessId())->where('key', $platform)->first();
-        if (!$sp || !$sp->connected) return response()->json(['success' => false, 'message' => 'Platform not connected.']);
+        $sp = SocialPlatform::where('business_id', $this->businessId())
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })->first();
+
+        if (!$sp || !$sp->connected) {
+            return response()->json(['success' => false, 'message' => 'Platform not connected.']);
+        }
 
         // Use CredentialManagerService for real connection testing
         try {
@@ -191,10 +208,20 @@ class DashboardController extends Controller
 
     public function disconnectPlatform(Request $request, string $platform)
     {
-        SocialPlatform::where('business_id',$this->businessId())->where('key',$platform)->update(['connected'=>false,'credentials'=>null]);
-        $msg = ucfirst($platform).' disconnected.';
-        if ($request->expectsJson()) return response()->json(['success'=>true,'message'=>$msg]);
-        return back()->with('info',$msg);
+        // Clear individual encrypted columns via CredentialManagerService
+        $credManager = new CredentialManagerService($this->businessId());
+        $credManager->disconnect($platform);
+
+        // Also clear legacy columns
+        SocialPlatform::where('business_id', $this->businessId())
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
+            ->update(['connected' => false, 'credentials' => null]);
+
+        $msg = ucfirst($platform) . ' disconnected.';
+        if ($request->expectsJson()) return response()->json(['success' => true, 'message' => $msg]);
+        return back()->with('info', $msg);
     }
 
     public function configureTelegram(Request $request)
@@ -204,11 +231,11 @@ class DashboardController extends Controller
         $token = $request->input('telegram_bot_token');
         $chatIds = array_map('trim', explode(',', $request->input('telegram_admin_chat_id', '')));
 
-        // Actually verify the bot token with Telegram API
+        // Actually verify the bot token with Telegram API (with optional proxy)
         $verified = false;
         $testMessage = 'Token saved but not verified.';
         try {
-            $response = Http::timeout(10)->get("https://api.telegram.org/bot{$token}/getMe");
+            $response = self::telegramHttp()->get("https://api.telegram.org/bot{$token}/getMe");
             if ($response->successful() && ($response->json('ok') === true)) {
                 $botInfo = $response->json('result', []);
                 $verified = true;
@@ -217,14 +244,16 @@ class DashboardController extends Controller
                 $testMessage = 'Invalid token: ' . ($response->json('description') ?? 'Unknown error');
             }
         } catch (\Exception $e) {
-            $testMessage = 'Could not reach Telegram API.';
+            $testMessage = 'Could not reach Telegram API: ' . $e->getMessage();
         }
 
         SocialPlatform::updateOrCreate(
             ['business_id' => $this->businessId(), 'key' => 'telegram'],
             [
+                'platform'          => 'telegram',
                 'name'              => 'Telegram',
                 'connected'         => true,
+                'status'            => $verified ? 'active' : 'error',
                 'credentials'       => ['bot_token' => $token, 'admin_chat_ids' => $chatIds],
                 'last_tested_at'    => now(),
                 'last_test_status'  => $verified ? 'ok' : 'error',
@@ -244,9 +273,9 @@ class DashboardController extends Controller
         $request->validate(['telegram_bot_token' => 'required|string']);
         $token = $request->input('telegram_bot_token');
 
-        // Actually call Telegram API to verify the bot token
+        // Actually call Telegram API to verify the bot token (with optional proxy)
         try {
-            $response = Http::timeout(10)->get("https://api.telegram.org/bot{$token}/getMe");
+            $response = self::telegramHttp()->get("https://api.telegram.org/bot{$token}/getMe");
 
             if ($response->successful() && ($response->json('ok') === true)) {
                 $botInfo = $response->json('result', []);
@@ -263,6 +292,39 @@ class DashboardController extends Controller
         } catch (\Exception $e) {
             return response()->json(['success' => false, 'message' => 'Could not reach Telegram API: ' . $e->getMessage()]);
         }
+    }
+
+    /**
+     * Build an HTTP client for Telegram API with optional SOCKS5/HTTP proxy.
+     *
+     * If TELEGRAM_PROXY_URL is set in .env the proxy is applied to every
+     * Telegram API call, which is needed in regions where Telegram is blocked
+     * (e.g. Pakistan, Iran, China).
+     */
+    public static function telegramHttp(): \Illuminate\Http\Client\PendingRequest
+    {
+        $client = Http::timeout(15);
+
+        $proxyUrl = config('services.telegram.proxy_url');
+        if (!empty($proxyUrl)) {
+            $options = ['proxy' => $proxyUrl];
+
+            // Support authenticated proxies
+            $proxyUser = config('services.telegram.proxy_username');
+            $proxyPass = config('services.telegram.proxy_password');
+            if ($proxyUser && $proxyPass) {
+                // Build full proxy URI with auth:  socks5://user:pass@host:port
+                $parsed = parse_url($proxyUrl);
+                $scheme = ($parsed['scheme'] ?? 'socks5') . '://';
+                $host   = $parsed['host'] ?? $proxyUrl;
+                $port   = isset($parsed['port']) ? ':' . $parsed['port'] : '';
+                $options['proxy'] = "{$scheme}{$proxyUser}:{$proxyPass}@{$host}{$port}";
+            }
+
+            $client = $client->withOptions($options);
+        }
+
+        return $client;
     }
 
     public function strategy()
@@ -490,13 +552,27 @@ class DashboardController extends Controller
             'name' => 'required|string|max:255',
             'industry' => 'nullable|string|max:100',
             'selected_platforms' => 'nullable|array',
+            'clone_ai_models' => 'nullable|boolean',
         ]);
+
+        $baseSlug = \Illuminate\Support\Str::slug($request->input('name'));
+        $slug = $baseSlug . '-' . \Illuminate\Support\Str::random(6);
+
+        // Ensure slug uniqueness with retry
+        $attempts = 0;
+        while (Business::where('slug', $slug)->exists() && $attempts < 5) {
+            $slug = $baseSlug . '-' . \Illuminate\Support\Str::random(6);
+            $attempts++;
+        }
 
         $b = Business::create([
             'name' => $request->input('name'),
+            'slug' => $slug,
             'industry' => $request->input('industry'),
             'owner_id' => Auth::id(),
             'timezone' => 'UTC',
+            'subscription_plan' => 'free',
+            'is_active' => true,
         ]);
 
         // Link user → new business via junction table
@@ -506,17 +582,22 @@ class DashboardController extends Controller
                 ['role' => 'owner']
             );
             // Also ensure current business is linked
-            \App\Models\UserBusinessLink::firstOrCreate(
-                ['user_id' => Auth::id(), 'business_id' => $this->businessId()],
-                ['role' => 'owner']
-            );
+            if ($this->businessId()) {
+                \App\Models\UserBusinessLink::firstOrCreate(
+                    ['user_id' => Auth::id(), 'business_id' => $this->businessId()],
+                    ['role' => 'owner']
+                );
+            }
         } catch (\Exception $e) {
             // Junction table may not exist yet
         }
 
+        $clonedAgents = 0;
+        $clonedAiModels = 0;
+
         // Auto-clone trained platform agents from current business
         $selectedPlatforms = $request->input('selected_platforms', []);
-        if (!empty($selectedPlatforms)) {
+        if (!empty($selectedPlatforms) && $this->businessId()) {
             try {
                 $agents = PlatformAgent::where('business_id', $this->businessId())
                     ->whereIn('platform', $selectedPlatforms)
@@ -533,16 +614,38 @@ class DashboardController extends Controller
                         'skill_version' => $agent->skill_version,
                         'is_active' => true,
                     ]);
+                    $clonedAgents++;
                 }
             } catch (\Exception $e) {
                 // Agent cloning may fail if table doesn't exist
             }
         }
 
+        // Clone AI model configurations from current business (for SaaS white-label)
+        if ($request->input('clone_ai_models', false) && $this->businessId()) {
+            try {
+                $aiModels = AiModelConfig::where('business_id', $this->businessId())->get();
+                foreach ($aiModels as $model) {
+                    AiModelConfig::create([
+                        'business_id' => $b->id,
+                        'provider'    => $model->provider,
+                        'model_name'  => $model->model_name,
+                        'api_key'     => $model->api_key,
+                        'base_url'    => $model->base_url,
+                        'is_active'   => $model->is_active,
+                    ]);
+                    $clonedAiModels++;
+                }
+            } catch (\Exception $e) {
+                // AI model cloning may fail
+            }
+        }
+
         return response()->json([
             'success' => true,
             'business' => $b,
-            'agents_cloned' => count($selectedPlatforms),
+            'agents_cloned' => $clonedAgents,
+            'ai_models_cloned' => $clonedAiModels,
         ]);
     }
 

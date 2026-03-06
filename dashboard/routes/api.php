@@ -442,7 +442,8 @@ Route::middleware('auth:sanctum')->group(function () {
         $platforms = \App\Models\SocialPlatform::where('business_id', $businessId)->get();
         $status = [];
         foreach ($platforms as $p) {
-            $status[$p->key] = [
+            $platformKey = $p->platform ?: $p->key;
+            $status[$platformKey] = [
                 'connected' => $p->connected,
                 'last_test' => $p->last_tested_at,
                 'status'    => $p->last_test_status,
@@ -467,16 +468,24 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/platforms/{platform}/connect', function (Request $request, string $platform) {
         $businessId = $request->input('business_id');
-        \App\Models\SocialPlatform::updateOrCreate(
-            ['business_id' => $businessId, 'key' => $platform],
-            ['name' => ucfirst($platform), 'connected' => true, 'credentials' => $request->except(['_token', 'business_id'])]
-        );
+
+        $credManager = new \App\Services\CredentialManagerService($businessId);
+        $credManager->saveCredentials($platform, $request->except(['_token', 'business_id']));
+
+        // Keep legacy 'key' column in sync
+        \App\Models\SocialPlatform::where('business_id', $businessId)
+            ->where('platform', $platform)
+            ->update(['key' => $platform, 'name' => ucfirst($platform), 'connected' => true]);
+
         return response()->json(['success' => true, 'message' => ucfirst($platform) . ' connected.']);
     })->name('api.platforms.connect');
 
     Route::post('/platforms/{platform}/test', function (Request $request, string $platform) {
         $businessId = $request->input('business_id');
-        $sp = \App\Models\SocialPlatform::where('business_id', $businessId)->where('key', $platform)->first();
+        $sp = \App\Models\SocialPlatform::where('business_id', $businessId)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })->first();
         if (!$sp || !$sp->connected) {
             return response()->json(['success' => false, 'message' => 'Platform not connected']);
         }
@@ -503,8 +512,17 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/platforms/{platform}/disconnect', function (Request $request, string $platform) {
         $businessId = $request->input('business_id');
-        \App\Models\SocialPlatform::where('business_id', $businessId)->where('key', $platform)
+
+        $credManager = new \App\Services\CredentialManagerService($businessId);
+        $credManager->disconnect($platform);
+
+        // Also clear legacy columns
+        \App\Models\SocialPlatform::where('business_id', $businessId)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->update(['connected' => false, 'credentials' => null]);
+
         return response()->json(['success' => true, 'message' => ucfirst($platform) . ' disconnected.']);
     })->name('api.platforms.disconnect');
 

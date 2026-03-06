@@ -198,8 +198,10 @@ class OAuthSetupService
         SocialPlatform::updateOrCreate(
             ['business_id' => $this->businessId, 'key' => $platform],
             [
+                'platform'    => $platform,
                 'name'        => ucfirst($platform),
                 'connected'   => false,
+                'status'      => 'active',
                 'credentials' => array_merge($credentials, ['pending_oauth' => true]),
             ]
         );
@@ -266,7 +268,9 @@ class OAuthSetupService
 
         // Get stored credentials
         $socialPlatform = SocialPlatform::where('business_id', $oauthState->business_id)
-            ->where('key', $platform)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->first();
 
         if (!$socialPlatform) {
@@ -348,6 +352,8 @@ class OAuthSetupService
 
             $socialPlatform->update([
                 'connected'       => true,
+                'platform'        => $platform,
+                'status'          => 'active',
                 'credentials'     => $credentials,
                 'last_tested_at'  => now(),
                 'last_test_status'=> 'ok',
@@ -374,7 +380,9 @@ class OAuthSetupService
     public function refreshToken(string $platform): array
     {
         $socialPlatform = SocialPlatform::where('business_id', $this->businessId)
-            ->where('key', $platform)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->first();
 
         if (!$socialPlatform || empty($socialPlatform->credentials['refresh_token'])) {
@@ -457,7 +465,9 @@ class OAuthSetupService
     public function testConnection(string $platform): array
     {
         $socialPlatform = SocialPlatform::where('business_id', $this->businessId)
-            ->where('key', $platform)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->first();
 
         if (!$socialPlatform || !$socialPlatform->connected) {

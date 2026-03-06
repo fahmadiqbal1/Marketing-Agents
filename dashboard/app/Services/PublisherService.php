@@ -418,12 +418,25 @@ class PublisherService
     private function getCredentials(string $platform): ?array
     {
         $social = SocialPlatform::where('business_id', $this->businessId)
-            ->where('key', $platform)
+            ->where(function ($q) use ($platform) {
+                $q->where('platform', $platform)->orWhere('key', $platform);
+            })
             ->where('connected', true)
             ->first();
 
         if (!$social) {
             return null;
+        }
+
+        // Prefer CredentialManagerService for decrypted individual columns
+        try {
+            $credManager = new CredentialManagerService($this->businessId);
+            $creds = $credManager->getCredentials($platform);
+            if ($creds) {
+                return $creds;
+            }
+        } catch (\Exception $e) {
+            // Fall through to legacy
         }
 
         return $social->credentials;
