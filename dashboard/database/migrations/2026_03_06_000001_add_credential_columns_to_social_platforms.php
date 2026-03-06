@@ -64,7 +64,10 @@ return new class extends Migration
         });
 
         // Back-fill: set 'platform' = 'key' for existing rows so CredentialManagerService can find them
-        \Illuminate\Support\Facades\DB::statement("UPDATE social_platforms SET platform = `key` WHERE platform IS NULL");
+        // Use Eloquent chunk to be cross-database compatible (avoids raw SQL column quoting issues)
+        \App\Models\SocialPlatform::whereNull('platform')->each(function ($row) {
+            $row->update(['platform' => $row->key]);
+        });
     }
 
     public function down(): void

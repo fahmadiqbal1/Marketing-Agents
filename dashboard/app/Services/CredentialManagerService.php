@@ -259,11 +259,8 @@ class CredentialManagerService
         foreach ($connections as $conn) {
             $extras = [];
             if ($conn->extra_data) {
-                try {
-                    $extras = json_decode($conn->extra_data, true) ?: [];
-                } catch (\Exception $e) {
-                    // Ignore
-                }
+                $decoded = json_decode($conn->extra_data, true);
+                $extras = is_array($decoded) ? $decoded : [];
             }
 
             // Use platform column if set, otherwise fall back to key

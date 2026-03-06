@@ -555,7 +555,15 @@ class DashboardController extends Controller
             'clone_ai_models' => 'nullable|boolean',
         ]);
 
-        $slug = \Illuminate\Support\Str::slug($request->input('name')) . '-' . \Illuminate\Support\Str::random(4);
+        $baseSlug = \Illuminate\Support\Str::slug($request->input('name'));
+        $slug = $baseSlug . '-' . \Illuminate\Support\Str::random(6);
+
+        // Ensure slug uniqueness with retry
+        $attempts = 0;
+        while (Business::where('slug', $slug)->exists() && $attempts < 5) {
+            $slug = $baseSlug . '-' . \Illuminate\Support\Str::random(6);
+            $attempts++;
+        }
 
         $b = Business::create([
             'name' => $request->input('name'),
