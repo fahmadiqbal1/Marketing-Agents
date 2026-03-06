@@ -480,8 +480,25 @@ Route::middleware('auth:sanctum')->group(function () {
         if (!$sp || !$sp->connected) {
             return response()->json(['success' => false, 'message' => 'Platform not connected']);
         }
-        $sp->update(['last_tested_at' => now(), 'last_test_status' => 'ok']);
-        return response()->json(['success' => true, 'message' => 'Connection OK']);
+
+        try {
+            $credManager = new \App\Services\CredentialManagerService($businessId);
+            $result = $credManager->testConnection($platform);
+
+            $sp->update([
+                'last_tested_at'    => now(),
+                'last_test_status'  => $result['success'] ? 'ok' : 'error',
+                'last_test_message' => $result['message'] ?? null,
+            ]);
+
+            return response()->json([
+                'success' => $result['success'],
+                'message' => $result['message'] ?? ($result['success'] ? 'Connection OK' : 'Test failed'),
+            ]);
+        } catch (\Exception $e) {
+            $sp->update(['last_tested_at' => now(), 'last_test_status' => 'error', 'last_test_message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Test failed: ' . $e->getMessage()]);
+        }
     })->name('api.platforms.test');
 
     Route::post('/platforms/{platform}/disconnect', function (Request $request, string $platform) {
@@ -721,9 +738,23 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/ai-models', function (Request $request) {
         $bid = $request->user()->business_id;
-        $models = \App\Models\AiModelConfig::where('business_id', $bid)
-            ->get(['id', 'provider', 'model_name', 'base_url', 'is_default', 'is_active']);
-        return response()->json(['success' => true, 'models' => $models]);
+        $models = \App\Models\AiModelConfig::where('business_id', $bid)->get();
+        $result = $models->map(function ($m) {
+            return [
+                'id'                => $m->id,
+                'provider'          => $m->provider,
+                'model_name'        => $m->model_name,
+                'base_url'          => $m->base_url,
+                'is_default'        => $m->is_default,
+                'is_active'         => $m->is_active,
+                'status'            => $m->status,
+                'masked_key'        => $m->masked_key,
+                'last_tested_at'    => $m->last_tested_at?->toIso8601String(),
+                'last_test_status'  => $m->last_test_status,
+                'last_test_message' => $m->last_test_message,
+            ];
+        });
+        return response()->json(['success' => true, 'models' => $result]);
     })->name('api.ai-models');
 
     Route::post('/ai-models', function (Request $request) {
@@ -738,23 +769,53 @@ Route::middleware('auth:sanctum')->group(function () {
             ], 400);
         }
 
+        $apiKey = $request->input('api_key');
+        $modelName = $request->input('model_name');
+        $baseUrl = $request->input('base_url');
+
+        // Actually test the API key
+        $tester = new \App\Services\AiProviderTestService();
+        $testResult = $tester->test($provider, $apiKey, $modelName, $baseUrl);
+
         \App\Models\AiModelConfig::updateOrCreate(
             ['business_id' => $bid, 'provider' => $provider],
             [
-                'api_key'    => $request->input('api_key'),
-                'model_name' => $request->input('model_name'),
-                'base_url'   => $request->input('base_url'),
-                'is_active'  => true,
+                'api_key'           => $apiKey,
+                'model_name'        => $modelName,
+                'base_url'          => $baseUrl,
+                'is_active'         => true,
+                'last_tested_at'    => now(),
+                'last_test_status'  => $testResult['success'] ? 'ok' : 'error',
+                'last_test_message' => $testResult['message'] ?? null,
             ]
         );
-        return response()->json(['success' => true, 'message' => 'AI model saved.']);
+        return response()->json([
+            'success'      => true,
+            'connected'    => $testResult['success'],
+            'message'      => $testResult['success']
+                ? ($testResult['message'] ?? 'AI model saved and verified.')
+                : 'Saved, but connection test failed: ' . ($testResult['message'] ?? 'Unknown error'),
+        ]);
     })->name('api.ai-models.save');
 
     Route::post('/ai-models/{provider}/test', function (Request $request, string $provider) {
         $bid = $request->user()->business_id;
         $model = \App\Models\AiModelConfig::where('business_id', $bid)->where('provider', $provider)->first();
         if (!$model) return response()->json(['success' => false, 'message' => 'Provider not configured.']);
-        return response()->json(['success' => true, 'message' => ucfirst($provider) . ' key is saved and ready.']);
+
+        $tester = new \App\Services\AiProviderTestService();
+        $result = $tester->test($provider, $model->api_key, $model->model_name, $model->base_url);
+
+        $model->update([
+            'last_tested_at'    => now(),
+            'last_test_status'  => $result['success'] ? 'ok' : 'error',
+            'last_test_message' => $result['message'] ?? null,
+        ]);
+
+        return response()->json([
+            'success' => $result['success'],
+            'message' => $result['message'] ?? ($result['success'] ? 'Connection verified.' : 'Connection failed.'),
+        ]);
     })->name('api.ai-models.test');
 
     Route::delete('/ai-models/{provider}', function (Request $request, string $provider) {

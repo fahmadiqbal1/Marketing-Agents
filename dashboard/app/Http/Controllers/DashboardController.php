@@ -14,12 +14,15 @@ use App\Models\PlatformAgent;
 use App\Models\Post;
 use App\Models\SocialPlatform;
 use App\Models\User;
+use App\Services\AiProviderTestService;
 use App\Services\AutoEngagementService;
 use App\Services\CaptionWriterService;
+use App\Services\CredentialManagerService;
 use App\Services\GrowthHackerService;
 use App\Services\HashtagResearcherService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -116,18 +119,74 @@ class DashboardController extends Controller
 
     public function connectPlatform(Request $request, string $platform)
     {
-        SocialPlatform::updateOrCreate(['business_id'=>$this->businessId(),'key'=>$platform],['name'=>ucfirst($platform),'connected'=>true,'credentials'=>$request->except(['_token'])]);
-        $msg = ucfirst($platform).' connected successfully.';
-        if ($request->expectsJson()) return response()->json(['success'=>true,'message'=>$msg]);
-        return back()->with('success',$msg);
+        $credentials = $request->except(['_token']);
+        $sp = SocialPlatform::updateOrCreate(
+            ['business_id' => $this->businessId(), 'key' => $platform],
+            ['name' => ucfirst($platform), 'connected' => true, 'credentials' => $credentials]
+        );
+
+        // Auto-test the connection after saving
+        $testResult = null;
+        try {
+            $credManager = new CredentialManagerService($this->businessId());
+            $testResult = $credManager->testConnection($platform);
+            $sp->update([
+                'last_tested_at'    => now(),
+                'last_test_status'  => $testResult['success'] ? 'ok' : 'error',
+                'last_test_message' => $testResult['message'] ?? null,
+            ]);
+        } catch (\Exception $e) {
+            // Connection saved but test failed — still mark as connected
+            $sp->update([
+                'last_tested_at'    => now(),
+                'last_test_status'  => 'error',
+                'last_test_message' => $e->getMessage(),
+            ]);
+        }
+
+        $verified = $testResult && $testResult['success'];
+        $msg = $verified
+            ? ($testResult['message'] ?? ucfirst($platform) . ' connected and verified.')
+            : ucfirst($platform) . ' credentials saved, but verification failed: ' . ($testResult['message'] ?? 'Could not verify.');
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success'  => true,
+                'verified' => $verified,
+                'message'  => $msg,
+            ]);
+        }
+        return back()->with($verified ? 'success' : 'info', $msg);
     }
 
     public function testPlatform(Request $request, string $platform)
     {
-        $sp = SocialPlatform::where('business_id',$this->businessId())->where('key',$platform)->first();
-        if (!$sp || !$sp->connected) return response()->json(['success'=>false,'message'=>'Platform not connected.']);
-        $sp->update(['last_tested_at'=>now(),'last_test_status'=>'ok','last_test_message'=>'Connection verified.']);
-        return response()->json(['success'=>true,'message'=>ucfirst($platform).' connection is working.']);
+        $sp = SocialPlatform::where('business_id', $this->businessId())->where('key', $platform)->first();
+        if (!$sp || !$sp->connected) return response()->json(['success' => false, 'message' => 'Platform not connected.']);
+
+        // Use CredentialManagerService for real connection testing
+        try {
+            $credManager = new CredentialManagerService($this->businessId());
+            $result = $credManager->testConnection($platform);
+
+            $sp->update([
+                'last_tested_at'    => now(),
+                'last_test_status'  => $result['success'] ? 'ok' : 'error',
+                'last_test_message' => $result['message'] ?? ($result['success'] ? 'Connection verified.' : 'Test failed.'),
+            ]);
+
+            return response()->json([
+                'success' => $result['success'],
+                'message' => $result['message'] ?? ($result['success'] ? ucfirst($platform) . ' connection is working.' : 'Connection test failed.'),
+            ]);
+        } catch (\Exception $e) {
+            $sp->update([
+                'last_tested_at'    => now(),
+                'last_test_status'  => 'error',
+                'last_test_message' => 'Test error: ' . $e->getMessage(),
+            ]);
+            return response()->json(['success' => false, 'message' => 'Connection test failed: ' . $e->getMessage()]);
+        }
     }
 
     public function disconnectPlatform(Request $request, string $platform)
@@ -140,15 +199,70 @@ class DashboardController extends Controller
 
     public function configureTelegram(Request $request)
     {
-        $request->validate(['telegram_bot_token'=>'required|string','telegram_admin_chat_id'=>'nullable|string']);
-        SocialPlatform::updateOrCreate(['business_id'=>$this->businessId(),'key'=>'telegram'],['name'=>'Telegram','connected'=>true,'credentials'=>['bot_token'=>$request->input('telegram_bot_token'),'admin_chat_ids'=>array_map('trim',explode(',',$request->input('telegram_admin_chat_id','')))]]);
-        return response()->json(['success'=>true,'message'=>'Telegram configured.']);
+        $request->validate(['telegram_bot_token' => 'required|string', 'telegram_admin_chat_id' => 'nullable|string']);
+
+        $token = $request->input('telegram_bot_token');
+        $chatIds = array_map('trim', explode(',', $request->input('telegram_admin_chat_id', '')));
+
+        // Actually verify the bot token with Telegram API
+        $verified = false;
+        $testMessage = 'Token saved but not verified.';
+        try {
+            $response = Http::timeout(10)->get("https://api.telegram.org/bot{$token}/getMe");
+            if ($response->successful() && ($response->json('ok') === true)) {
+                $botInfo = $response->json('result', []);
+                $verified = true;
+                $testMessage = 'Connected to @' . ($botInfo['username'] ?? 'bot');
+            } else {
+                $testMessage = 'Invalid token: ' . ($response->json('description') ?? 'Unknown error');
+            }
+        } catch (\Exception $e) {
+            $testMessage = 'Could not reach Telegram API.';
+        }
+
+        SocialPlatform::updateOrCreate(
+            ['business_id' => $this->businessId(), 'key' => 'telegram'],
+            [
+                'name'              => 'Telegram',
+                'connected'         => true,
+                'credentials'       => ['bot_token' => $token, 'admin_chat_ids' => $chatIds],
+                'last_tested_at'    => now(),
+                'last_test_status'  => $verified ? 'ok' : 'error',
+                'last_test_message' => $testMessage,
+            ]
+        );
+
+        return response()->json([
+            'success'  => true,
+            'verified' => $verified,
+            'message'  => $verified ? "Telegram configured — {$testMessage}." : "Telegram saved. Warning: {$testMessage}",
+        ]);
     }
 
     public function testTelegram(Request $request)
     {
-        $request->validate(['telegram_bot_token'=>'required|string']);
-        return response()->json(['success'=>true,'message'=>'Token format looks valid.']);
+        $request->validate(['telegram_bot_token' => 'required|string']);
+        $token = $request->input('telegram_bot_token');
+
+        // Actually call Telegram API to verify the bot token
+        try {
+            $response = Http::timeout(10)->get("https://api.telegram.org/bot{$token}/getMe");
+
+            if ($response->successful() && ($response->json('ok') === true)) {
+                $botInfo = $response->json('result', []);
+                $botName = $botInfo['first_name'] ?? 'Bot';
+                $botUsername = $botInfo['username'] ?? '';
+                return response()->json([
+                    'success' => true,
+                    'message' => "Token valid — connected to @{$botUsername} ({$botName}).",
+                ]);
+            }
+
+            $errorMsg = $response->json('description') ?? 'Invalid token.';
+            return response()->json(['success' => false, 'message' => "Telegram: {$errorMsg}"]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => 'Could not reach Telegram API: ' . $e->getMessage()]);
+        }
     }
 
     public function strategy()
@@ -259,20 +373,82 @@ class DashboardController extends Controller
         return response()->json(['success'=>true,'message'=>'Source deleted.']);
     }
 
-    public function listAiModels() { return response()->json(['success'=>true,'models'=>AiModelConfig::where('business_id',$this->businessId())->get(['id','provider','model_name','is_default','is_active'])]); }
+    public function listAiModels()
+    {
+        $models = AiModelConfig::where('business_id', $this->businessId())->get();
+        $result = $models->map(function ($m) {
+            return [
+                'id'              => $m->id,
+                'provider'        => $m->provider,
+                'model_name'      => $m->model_name,
+                'is_default'      => $m->is_default,
+                'is_active'       => $m->is_active,
+                'status'          => $m->status,
+                'masked_key'      => $m->masked_key,
+                'last_tested_at'  => $m->last_tested_at?->toIso8601String(),
+                'last_test_status' => $m->last_test_status,
+                'last_test_message' => $m->last_test_message,
+            ];
+        });
+        return response()->json(['success' => true, 'models' => $result]);
+    }
 
     public function saveAiModel(Request $request)
     {
         $request->validate(['provider'=>'required|string|max:50','api_key'=>'required|string|max:500','model_name'=>'nullable|string|max:100']);
-        AiModelConfig::updateOrCreate(['business_id'=>$this->businessId(),'provider'=>$request->input('provider')],['api_key'=>$request->input('api_key'),'model_name'=>$request->input('model_name'),'is_active'=>true]);
-        return response()->json(['success'=>true,'message'=>'AI model saved.']);
+
+        $provider = $request->input('provider');
+        $apiKey = $request->input('api_key');
+        $modelName = $request->input('model_name');
+        $baseUrl = $request->input('base_url');
+
+        // Actually test the API key before saving
+        $tester = new AiProviderTestService();
+        $testResult = $tester->test($provider, $apiKey, $modelName, $baseUrl);
+
+        $model = AiModelConfig::updateOrCreate(
+            ['business_id' => $this->businessId(), 'provider' => $provider],
+            [
+                'api_key'           => $apiKey,
+                'model_name'        => $modelName,
+                'base_url'          => $baseUrl,
+                'is_active'         => true,
+                'last_tested_at'    => now(),
+                'last_test_status'  => $testResult['success'] ? 'ok' : 'error',
+                'last_test_message' => $testResult['message'] ?? null,
+            ]
+        );
+
+        return response()->json([
+            'success'      => true,
+            'connected'    => $testResult['success'],
+            'message'      => $testResult['success']
+                ? ($testResult['message'] ?? ucfirst($provider) . ' connected successfully.')
+                : 'Saved, but connection test failed: ' . ($testResult['message'] ?? 'Unknown error'),
+            'test_status'  => $testResult['success'] ? 'ok' : 'error',
+            'test_message' => $testResult['message'] ?? null,
+        ]);
     }
 
     public function testAiModel(Request $request, string $provider)
     {
-        $model = AiModelConfig::where('business_id',$this->businessId())->where('provider',$provider)->first();
-        if (!$model) return response()->json(['success'=>false,'message'=>'Provider not configured.']);
-        return response()->json(['success'=>true,'message'=>ucfirst($provider).' key is saved.']);
+        $model = AiModelConfig::where('business_id', $this->businessId())->where('provider', $provider)->first();
+        if (!$model) return response()->json(['success' => false, 'message' => 'Provider not configured.']);
+
+        // Actually test the API key
+        $tester = new AiProviderTestService();
+        $result = $tester->test($provider, $model->api_key, $model->model_name, $model->base_url);
+
+        $model->update([
+            'last_tested_at'    => now(),
+            'last_test_status'  => $result['success'] ? 'ok' : 'error',
+            'last_test_message' => $result['message'] ?? null,
+        ]);
+
+        return response()->json([
+            'success' => $result['success'],
+            'message' => $result['message'] ?? ($result['success'] ? 'Connection verified.' : 'Connection failed.'),
+        ]);
     }
 
     public function deleteAiModel(Request $request, string $provider)

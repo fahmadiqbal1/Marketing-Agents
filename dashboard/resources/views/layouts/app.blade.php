@@ -143,9 +143,12 @@
         }
 
         /* ── Business Switcher ── */
-        #businessSwitcher { display: none; padding: 0 .5rem .5rem; }
-        #businessSwitcher .switcher-item { display: flex; align-items: center; gap: .5rem; padding: .35rem .5rem; border-radius: .35rem; cursor: pointer; font-size: .8rem; color: rgba(255,255,255,.6); }
+        #businessSwitcher { display: none; padding: .5rem .5rem .5rem; border-bottom: 1px solid var(--sidebar-border); background: rgba(255,255,255,.02); }
+        #businessSwitcher .switcher-item { display: flex; align-items: center; gap: .5rem; padding: .4rem .5rem; border-radius: .35rem; cursor: pointer; font-size: .8rem; color: rgba(255,255,255,.6); }
         #businessSwitcher .switcher-item:hover { background: rgba(255,255,255,.06); color: #fff; }
+        #businessSwitcher .switcher-item.active-business { background: rgba(13,110,253,.15); color: #3d8bfd; font-weight: 600; }
+        .business-switcher-btn { background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.12); color: rgba(255,255,255,.5); border-radius: .3rem; padding: .15rem .4rem; font-size: .7rem; cursor: pointer; transition: all .15s; }
+        .business-switcher-btn:hover { background: rgba(255,255,255,.1); color: #fff; border-color: rgba(255,255,255,.2); }
     </style>
 
     @stack('styles')
@@ -160,22 +163,26 @@
             <div class="sidebar-brand-name">{{ auth()->user()->business->name ?? 'Marketing Hub' }}</div>
             <div class="sidebar-brand-sub">AI Marketing Platform</div>
         </div>
-        <button onclick="toggleBusinessSwitcher()" class="btn btn-sm p-0" style="background:none;border:none;color:rgba(255,255,255,.3);" title="Switch Business">
-            <i class="bi bi-chevron-expand"></i>
+        <button onclick="toggleBusinessSwitcher()" class="business-switcher-btn" title="Switch or manage businesses">
+            <i class="bi bi-buildings me-1"></i><i class="bi bi-chevron-expand"></i>
         </button>
     </div>
 
     {{-- Business Switcher --}}
     <div id="businessSwitcher">
-        <div id="businessList" style="max-height:110px;overflow-y:auto;padding:.35rem .25rem;">
+        <div style="padding:.25rem .5rem .35rem;display:flex;align-items:center;justify-content:space-between;">
+            <span style="font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:rgba(255,255,255,.35);">Your Businesses</span>
+            <span class="badge bg-info text-dark" style="font-size:.6rem;" id="businessCount"></span>
+        </div>
+        <div id="businessList" style="max-height:140px;overflow-y:auto;padding:.25rem .25rem;">
             <div style="color:rgba(255,255,255,.3);font-size:.75rem;padding:.25rem .5rem;">Loading...</div>
         </div>
-        <div style="padding:.35rem .25rem 0;">
+        <div style="padding:.4rem .25rem 0;">
             <button onclick="showNewBusinessForm()" class="btn btn-sm w-100" style="background:rgba(255,255,255,.05);color:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.1);font-size:.75rem;">
-                <i class="bi bi-plus-lg me-1"></i>New Business
+                <i class="bi bi-plus-lg me-1"></i>Add New Business
             </button>
         </div>
-        <div id="newBusinessForm" style="display:none;padding:.35rem .25rem 0;">
+        <div id="newBusinessForm" style="display:none;padding:.4rem .25rem 0;">
             <input type="text" id="newBusinessName" class="form-control form-control-sm mb-1" placeholder="Business name">
             <button onclick="createBusiness(this)" class="btn btn-primary btn-sm w-100" style="font-size:.75rem;"><i class="bi bi-check-lg me-1"></i>Create</button>
         </div>
@@ -433,11 +440,22 @@ async function loadBusinesses() {
         const r = await fetch('/businesses', { headers: { 'Accept': 'application/json' } });
         const d = await r.json();
         const list = document.getElementById('businessList');
+        const countBadge = document.getElementById('businessCount');
         if (d.businesses?.length) {
-            list.innerHTML = d.businesses.map(b =>
-                `<div class="switcher-item" onclick="doSwitchBusiness(${b.id},'${b.name.replace(/'/g,"\\'")}')"><i class="bi bi-building me-1"></i>${b.name}</div>`
-            ).join('');
-        } else { list.innerHTML = '<div style="color:rgba(255,255,255,.3);font-size:.75rem;padding:.25rem .5rem;">No other businesses.</div>'; }
+            const currentId = d.current_business_id;
+            countBadge.textContent = d.businesses.length;
+            list.innerHTML = d.businesses.map(b => {
+                const isCurrent = b.id === currentId;
+                return `<div class="switcher-item${isCurrent ? ' active-business' : ''}" onclick="${isCurrent ? '' : `doSwitchBusiness(${b.id},'${b.name.replace(/'/g,"\\'")}')`}">
+                    <i class="bi ${isCurrent ? 'bi-building-check' : 'bi-building'} me-1"></i>
+                    <span style="flex:1">${b.name}</span>
+                    ${isCurrent ? '<span class="badge bg-primary" style="font-size:.6rem;">Current</span>' : ''}
+                </div>`;
+            }).join('');
+        } else {
+            countBadge.textContent = '0';
+            list.innerHTML = '<div style="color:rgba(255,255,255,.3);font-size:.75rem;padding:.25rem .5rem;">No businesses yet. Create one below.</div>';
+        }
     } catch(e) {}
 }
 async function doSwitchBusiness(id, name) {
