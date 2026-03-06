@@ -42,11 +42,24 @@ Route::middleware(['auth'])->group(function () {
     Route::post('/platforms/telegram/configure',    [DashboardController::class, 'configureTelegram'])->name('dashboard.platforms.telegram.configure');
     Route::post('/platforms/telegram/test',         [DashboardController::class, 'testTelegram'])->name('dashboard.platforms.telegram.test');
 
-    // AI Models
-    Route::get('/ai-models',                  [DashboardController::class, 'listAiModels'])->name('dashboard.ai-models');
-    Route::post('/ai-models',                 [DashboardController::class, 'saveAiModel'])->name('dashboard.ai-models.save');
-    Route::post('/ai-models/{provider}/test', [DashboardController::class, 'testAiModel'])->name('dashboard.ai-models.test');
-    Route::delete('/ai-models/{provider}',    [DashboardController::class, 'deleteAiModel'])->name('dashboard.ai-models.delete');
+    // AI Models — ID-based CRUD (allows multiple custom endpoints per provider)
+    Route::get('/ai-models',              [DashboardController::class, 'listAiModels'])->name('dashboard.ai-models');
+    Route::post('/ai-models',             [DashboardController::class, 'saveAiModel'])->name('dashboard.ai-models.save');
+    Route::put('/ai-models/{id}',         [DashboardController::class, 'updateAiModel'])->name('dashboard.ai-models.update');
+    Route::post('/ai-models/{id}/test',   [DashboardController::class, 'testAiModel'])->name('dashboard.ai-models.test');
+    Route::delete('/ai-models/{id}',      [DashboardController::class, 'deleteAiModel'])->name('dashboard.ai-models.delete');
+
+    // Orchestrator
+    Route::get('/orchestrator',           [DashboardController::class, 'getOrchestrator'])->name('dashboard.orchestrator');
+    Route::post('/orchestrator/configure',[DashboardController::class, 'configureOrchestrator'])->name('dashboard.orchestrator.configure');
+    Route::post('/orchestrator/plan',     [DashboardController::class, 'orchestratorPlan'])->name('dashboard.orchestrator.plan');
+    Route::get('/orchestrator/skills',    [DashboardController::class, 'orchestratorSkills'])->name('dashboard.orchestrator.skills');
+
+    // Orchestrator → Sub-agent skill transfer
+    Route::post('/orchestrator/transfer',             [DashboardController::class, 'transferSkillsToAgent'])->name('dashboard.orchestrator.transfer');
+    Route::post('/orchestrator/transfer-all',         [DashboardController::class, 'transferSkillsToAllAgents'])->name('dashboard.orchestrator.transfer-all');
+    Route::get('/orchestrator/agents/{platform}/skills',   [DashboardController::class, 'getAgentInjectedSkills'])->name('dashboard.orchestrator.agent-skills');
+    Route::delete('/orchestrator/agents/{platform}/skills',[DashboardController::class, 'clearAgentSkills'])->name('dashboard.orchestrator.agent-skills.clear');
 
     // Strategy, Settings, Calendar
     Route::get('/strategy', [DashboardController::class, 'strategy'])->name('dashboard.strategy');

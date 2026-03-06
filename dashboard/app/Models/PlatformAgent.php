@@ -20,6 +20,7 @@ class PlatformAgent extends Model
         'rag_collection_id',
         'trained_from_repos',
         'learned_patterns',
+        'injected_skills',
         'skill_version',
         'last_learned_at',
         'is_active',
@@ -31,6 +32,7 @@ class PlatformAgent extends Model
         'performance_stats'  => 'array',
         'trained_from_repos' => 'array',
         'learned_patterns'   => 'array',
+        'injected_skills'    => 'array',
         'config'             => 'array',
         'last_learned_at'    => 'datetime',
         'is_active'          => 'boolean',
@@ -101,5 +103,32 @@ class PlatformAgent extends Model
         $this->update([
             'learning_profile' => array_merge($profile, $data),
         ]);
+    }
+
+    /**
+     * Return a flat list of skill titles injected from the Orchestrator.
+     */
+    public function getInjectedSkillTitles(): array
+    {
+        return array_column($this->injected_skills ?? [], 'title');
+    }
+
+    /**
+     * Build a compact skill context string suitable for prepending to any
+     * system prompt so the sub-agent is aware of its transferred capabilities.
+     */
+    public function buildSkillContext(): string
+    {
+        $skills = $this->injected_skills ?? [];
+        if (empty($skills)) {
+            return '';
+        }
+
+        $lines = [];
+        foreach ($skills as $skill) {
+            $lines[] = '- ' . ($skill['title'] ?? 'Skill') . ': ' . ($skill['description'] ?? '');
+        }
+
+        return "## Capabilities transferred by Orchestrator\n" . implode("\n", $lines) . "\n\n";
     }
 }

@@ -115,12 +115,17 @@
 </div>
 
 {{-- AI Models Section --}}
-<div class="d-flex align-items-center gap-3 mb-3 mt-4">
-    <i class="bi bi-cpu fs-5" style="color:#7c3aed;"></i>
-    <div>
-        <h6 class="text-white mb-0">AI Models &amp; Providers</h6>
-        <p class="text-secondary small mb-0">Configure the AI engines powering your content automation</p>
+<div class="d-flex justify-content-between align-items-center mb-3 mt-4 flex-wrap gap-2">
+    <div class="d-flex align-items-center gap-3">
+        <i class="bi bi-cpu fs-5" style="color:#7c3aed;"></i>
+        <div>
+            <h6 class="text-white mb-0">AI Models &amp; Providers</h6>
+            <p class="text-secondary small mb-0">Configure the AI engines powering your content automation. Add as many custom endpoints as you need.</p>
+        </div>
     </div>
+    <button class="btn btn-primary btn-sm" onclick="openAddModelModal()">
+        <i class="bi bi-plus-lg me-1"></i>Add Model
+    </button>
 </div>
 
 <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-3 mb-4" id="ai-models-grid">
@@ -279,35 +284,59 @@
     </div>
 </div>
 
-{{-- AI Model Modal (Bootstrap) --}}
+{{-- AI Model Modal (Bootstrap) — Add/Edit --}}
 <div class="modal fade" id="aiModelModal" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content" style="background:#16213e;border:1px solid rgba(255,255,255,.1);">
             <div class="modal-header border-0">
-                <h5 class="modal-title text-white"><i class="bi bi-cpu me-2" style="color:#7c3aed;"></i>Configure <span id="aiModelProviderName"></span></h5>
+                <h5 class="modal-title text-white"><i class="bi bi-cpu me-2" style="color:#7c3aed;"></i><span id="aiModelModalTitle">Add AI Model</span></h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <input type="hidden" id="aiModelProviderKey">
+                <input type="hidden" id="aiModelEditId"> {{-- empty = new, set = edit by ID --}}
+
                 <div class="mb-3">
-                    <label class="form-label text-secondary small">API Key</label>
+                    <label class="form-label text-secondary small">Provider <span class="text-danger">*</span></label>
+                    <select id="aiModelProviderKey" class="form-select" onchange="onProviderChange(this.value)">
+                        <option value="">— select provider —</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="google_gemini">Google Gemini</option>
+                        <option value="anthropic">Anthropic Claude</option>
+                        <option value="mistral">Mistral AI</option>
+                        <option value="deepseek">DeepSeek</option>
+                        <option value="groq">Groq</option>
+                        <option value="ollama">Ollama (Local)</option>
+                        <option value="openai_compatible">Custom / OpenAI-Compatible Endpoint</option>
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label text-secondary small">Display Name <span class="text-muted small">(optional — helps identify this instance)</span></label>
+                    <input type="text" id="aiModelDisplayName" class="form-control" placeholder="e.g. My GPT-4o, LM Studio Local, Company Ollama">
+                </div>
+
+                <div class="mb-3" id="aiModelApiKeyGroup">
+                    <label class="form-label text-secondary small">API Key <span id="aiModelApiKeyRequired" class="text-danger">*</span></label>
                     <input type="password" id="aiModelApiKey" class="form-control" placeholder="Paste your API key"
                            onfocus="this.type='text'" onblur="if(!this.value)this.type='password'">
+                    <div class="form-text text-secondary" id="aiModelApiKeyHint"></div>
                 </div>
+
                 <div class="mb-3">
-                    <label class="form-label text-secondary small">Model Name (optional, uses default if blank)</label>
+                    <label class="form-label text-secondary small">Model Name <span class="text-muted small">(uses provider default if blank)</span></label>
                     <input type="text" id="aiModelName" class="form-control">
                     <div class="form-text text-secondary" id="aiModelHint"></div>
                 </div>
+
                 <div class="mb-3" id="aiModelBaseUrlGroup" style="display:none;">
-                    <label class="form-label text-secondary small">Base URL</label>
+                    <label class="form-label text-secondary small">Base URL <span class="text-danger">*</span></label>
                     <input type="url" id="aiModelBaseUrl" class="form-control" placeholder="http://localhost:11434">
-                    <div class="form-text text-secondary">Server URL for local/custom AI endpoints</div>
+                    <div class="form-text text-secondary">Server URL for local / custom AI endpoints</div>
                 </div>
             </div>
-            <div class="modal-footer border-0">
+            <div class="modal-footer border-0 d-flex justify-content-between">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="saveAiModel(this)">
+                <button type="button" class="btn btn-primary" id="aiModelSaveBtn" onclick="saveOrUpdateAiModel(this)">
                     <i class="bi bi-check-lg me-1"></i>Save &amp; Connect
                 </button>
             </div>
@@ -316,34 +345,33 @@
 </div>
 
 <script>
-const AI_PROVIDERS = [
-    { key: 'openai',        name: 'OpenAI',           icon: 'bi-stars',              color: '#10a37f', defaultModel: 'gpt-4o-mini',               hint: 'gpt-4o, gpt-4o-mini, gpt-4-turbo, o1-mini' },
-    { key: 'google_gemini', name: 'Google Gemini',    icon: 'bi-google',             color: '#4285F4', defaultModel: 'gemini-2.0-flash',           hint: 'gemini-2.0-flash, gemini-1.5-pro, gemini-1.5-flash' },
-    { key: 'anthropic',     name: 'Anthropic Claude', icon: 'bi-chat-square-dots',   color: '#d97706', defaultModel: 'claude-sonnet-4-20250514',    hint: 'claude-sonnet-4-20250514, claude-3-5-sonnet, claude-3-haiku' },
-    { key: 'mistral',       name: 'Mistral AI',       icon: 'bi-wind',               color: '#ff7000', defaultModel: 'mistral-large-latest',        hint: 'mistral-large-latest, mistral-medium, mistral-small' },
-    { key: 'deepseek',      name: 'DeepSeek',         icon: 'bi-search-heart',       color: '#0ea5e9', defaultModel: 'deepseek-chat',              hint: 'deepseek-chat, deepseek-coder' },
-    { key: 'groq',          name: 'Groq',             icon: 'bi-lightning-charge',   color: '#f97316', defaultModel: 'llama-3.1-70b-versatile',    hint: 'llama-3.1-70b-versatile, mixtral-8x7b-32768' },
-    { key: 'ollama',        name: 'Ollama (Local)',    icon: 'bi-pc-display',        color: '#6366f1', defaultModel: 'llama3',                     hint: 'llama3, mistral, codellama, phi3 — runs on your machine', needsBaseUrl: true },
-    { key: 'openai_compatible', name: 'Custom Endpoint', icon: 'bi-plug',            color: '#8b5cf6', defaultModel: 'default',                    hint: 'Any OpenAI-compatible API (LM Studio, vLLM, text-generation-webui)', needsBaseUrl: true },
-];
+const AI_PROVIDER_META = {
+    openai:           { name: 'OpenAI',                  icon: 'bi-stars',            color: '#10a37f', defaultModel: 'gpt-4o-mini',            hint: 'gpt-4o, gpt-4o-mini, gpt-4-turbo, o1-mini', needsBaseUrl: false },
+    google_gemini:    { name: 'Google Gemini',           icon: 'bi-google',           color: '#4285F4', defaultModel: 'gemini-2.0-flash',       hint: 'gemini-2.0-flash, gemini-1.5-pro', needsBaseUrl: false },
+    anthropic:        { name: 'Anthropic Claude',        icon: 'bi-chat-square-dots', color: '#d97706', defaultModel: 'claude-3-5-sonnet-20241022', hint: 'claude-3-5-sonnet, claude-3-haiku', needsBaseUrl: false },
+    mistral:          { name: 'Mistral AI',              icon: 'bi-wind',             color: '#ff7000', defaultModel: 'mistral-large-latest',   hint: 'mistral-large-latest, mistral-small', needsBaseUrl: false },
+    deepseek:         { name: 'DeepSeek',                icon: 'bi-search-heart',     color: '#0ea5e9', defaultModel: 'deepseek-chat',          hint: 'deepseek-chat, deepseek-coder', needsBaseUrl: false },
+    groq:             { name: 'Groq',                    icon: 'bi-lightning-charge', color: '#f97316', defaultModel: 'llama-3.1-70b-versatile', hint: 'llama-3.1-70b-versatile, mixtral-8x7b-32768', needsBaseUrl: false },
+    ollama:           { name: 'Ollama (Local)',           icon: 'bi-pc-display',      color: '#6366f1', defaultModel: 'llama3',                 hint: 'llama3, mistral, codellama, phi3', needsBaseUrl: true, localOnly: true },
+    openai_compatible:{ name: 'Custom Endpoint',         icon: 'bi-plug',             color: '#8b5cf6', defaultModel: 'default',                hint: 'LM Studio, vLLM, text-generation-webui, any OpenAI-compatible API', needsBaseUrl: true },
+};
 
-function statusBadge(status) {
+function statusBadge(status, isOrchestrator) {
     const map = {
-        active:     { cls: 'bg-success',              icon: 'bi-check-circle-fill', text: 'Connected' },
-        configured: { cls: 'bg-warning text-dark',    icon: 'bi-exclamation-circle', text: 'Not Verified' },
-        error:      { cls: 'bg-danger',               icon: 'bi-x-circle-fill',     text: 'Error' },
-        inactive:   { cls: 'bg-secondary',            icon: 'bi-dash-circle',       text: 'Inactive' },
+        active:     { cls: 'bg-success',           icon: 'bi-check-circle-fill', text: 'Connected' },
+        configured: { cls: 'bg-warning text-dark', icon: 'bi-exclamation-circle',text: 'Not Verified' },
+        error:      { cls: 'bg-danger',            icon: 'bi-x-circle-fill',     text: 'Error' },
+        inactive:   { cls: 'bg-secondary',         icon: 'bi-dash-circle',       text: 'Inactive' },
     };
     const s = map[status] || map.inactive;
-    return `<span class="badge ${s.cls}"><i class="bi ${s.icon} me-1"></i>${s.text}</span>`;
+    const orch = isOrchestrator ? ' <span class="badge bg-purple ms-1" style="background:#7c3aed;">Orchestrator</span>' : '';
+    return `<span class="badge ${s.cls}"><i class="bi ${s.icon} me-1"></i>${s.text}</span>${orch}`;
 }
 
 function statusDot(status) {
     const colors = { active: '#10b981', configured: '#f59e0b', error: '#ef4444', inactive: 'rgba(255,255,255,.2)' };
     const labels = { active: 'Connected', configured: 'Not verified', error: 'Connection error', inactive: 'Not configured' };
-    const c = colors[status] || colors.inactive;
-    const l = labels[status] || 'Not configured';
-    return `<span style="color:${c};">●</span> ${l}`;
+    return `<span style="color:${colors[status]||colors.inactive};">●</span> ${labels[status]||'Not configured'}`;
 }
 
 async function loadAiModels() {
@@ -351,108 +379,176 @@ async function loadAiModels() {
     try {
         const data = await ajaxGet('/ai-models');
         const models = data.models || [];
-        const modelMap = {};
-        models.forEach(m => { modelMap[m.provider] = m; });
+
+        if (models.length === 0) {
+            grid.innerHTML = `<div class="col-12">
+                <div class="card p-4 text-center text-secondary">
+                    <i class="bi bi-cpu fs-2 mb-2" style="color:#7c3aed;"></i>
+                    <div class="mb-2">No AI models configured yet.</div>
+                    <button class="btn btn-primary btn-sm mx-auto" style="width:fit-content;" onclick="openAddModelModal()">
+                        <i class="bi bi-plus-lg me-1"></i>Add Your First Model
+                    </button>
+                </div>
+            </div>`;
+            return;
+        }
 
         let html = '';
-        AI_PROVIDERS.forEach(p => {
-            const cfg = modelMap[p.key];
-            const status = cfg ? (cfg.status || 'configured') : 'inactive';
+        models.forEach(cfg => {
+            const meta   = AI_PROVIDER_META[cfg.provider] || { icon: 'bi-cpu', color: '#8b5cf6', name: cfg.provider };
+            const status = cfg.status || 'configured';
+            const label  = cfg.display_name || meta.name || cfg.provider;
 
-            html += `<div class="col"><div class="card p-3 h-100" id="ai-model-${p.key}">`;
-            html += `<div class="d-flex align-items-center gap-3 mb-2">
+            html += `<div class="col"><div class="card p-3 h-100" id="ai-model-${cfg.id}">`;
+            html += `<div class="d-flex align-items-start gap-3 mb-2">
                 <div class="rounded-3 d-flex align-items-center justify-content-center flex-shrink-0"
-                     style="width:40px;height:40px;background:${p.color}22;">
-                     <i class="bi ${p.icon}" style="color:${p.color};font-size:1.1rem;"></i>
+                     style="width:40px;height:40px;background:${meta.color}22;">
+                     <i class="bi ${meta.icon}" style="color:${meta.color};font-size:1.1rem;"></i>
                 </div>
                 <div class="flex-grow-1 overflow-hidden">
-                    <div class="text-white small fw-semibold">${p.name}</div>
-                    <div class="text-secondary" style="font-size:.7rem;">
-                        ${statusDot(status)}
-                        ${cfg && cfg.model_name ? ' · ' + cfg.model_name : ''}
-                    </div>
+                    <div class="text-white small fw-semibold">${label}</div>
+                    <div class="text-secondary" style="font-size:.7rem;">${meta.name}${cfg.model_name ? ' · ' + cfg.model_name : ''}</div>
+                    <div style="font-size:.7rem;">${statusDot(status)}</div>
                 </div>
-                <div>${cfg ? statusBadge(status) : ''}</div>
+                <div class="text-end">${statusBadge(status, cfg.is_orchestrator)}</div>
             </div>`;
 
-            if (cfg) {
-                html += `<div class="mb-1 text-secondary" style="font-size:.7rem;">Key: ${cfg.masked_key || '••••••'}</div>`;
-                if (cfg.last_test_message) {
-                    const msgColor = status === 'active' ? 'text-success' : (status === 'error' ? 'text-danger' : 'text-warning');
-                    html += `<div class="${msgColor} mb-2" style="font-size:.7rem;"><i class="bi ${status === 'active' ? 'bi-check-circle' : 'bi-exclamation-triangle'} me-1"></i>${cfg.last_test_message}</div>`;
-                }
-                if (cfg.last_tested_at) {
-                    html += `<div class="text-secondary mb-2" style="font-size:.65rem;">Last tested: ${new Date(cfg.last_tested_at).toLocaleString()}</div>`;
-                }
-                html += `<div class="d-flex gap-1 flex-wrap">
-                    <button class="btn btn-outline-secondary btn-sm" id="test-btn-${p.key}" onclick="testAiModel('${p.key}', this)"><i class="bi bi-arrow-repeat me-1"></i>Test</button>
-                    <button class="btn btn-outline-secondary btn-sm" onclick="openAiModelModal('${p.key}','${p.name}','${p.defaultModel}','${p.hint}')"><i class="bi bi-pencil me-1"></i>Edit</button>
-                    <button class="btn btn-outline-danger btn-sm" onclick="deleteAiModel('${p.key}', this)"><i class="bi bi-trash"></i></button>
-                </div>`;
-            } else {
-                html += `<button class="btn btn-primary btn-sm w-100" onclick="openAiModelModal('${p.key}','${p.name}','${p.defaultModel}','${p.hint}')"><i class="bi bi-plus-lg me-1"></i>Configure</button>`;
+            html += `<div class="mb-1 text-secondary" style="font-size:.7rem;">Key: ${cfg.masked_key || '—'}</div>`;
+            if (cfg.base_url) html += `<div class="text-info mb-1" style="font-size:.65rem;word-break:break-all;"><i class="bi bi-link-45deg me-1"></i>${cfg.base_url}</div>`;
+            if (cfg.last_test_message) {
+                const mc = status === 'active' ? 'text-success' : (status === 'error' ? 'text-danger' : 'text-warning');
+                html += `<div class="${mc} mb-1" style="font-size:.7rem;"><i class="bi bi-info-circle me-1"></i>${cfg.last_test_message}</div>`;
             }
+            if (cfg.last_tested_at) {
+                html += `<div class="text-secondary mb-2" style="font-size:.65rem;">Tested: ${new Date(cfg.last_tested_at).toLocaleString()}</div>`;
+            }
+
+            html += `<div class="d-flex gap-1 flex-wrap mt-auto pt-2">
+                <button class="btn btn-outline-secondary btn-sm" onclick="testAiModelById(${cfg.id}, this)"><i class="bi bi-arrow-repeat me-1"></i>Test</button>
+                <button class="btn btn-outline-secondary btn-sm" onclick="openEditModelModal(${cfg.id})"><i class="bi bi-pencil me-1"></i>Edit</button>
+                <button class="btn btn-outline-danger btn-sm" onclick="deleteAiModelById(${cfg.id}, this)"><i class="bi bi-trash"></i></button>
+            </div>`;
             html += '</div></div>';
         });
+
+        // Always show "Add Another" card at the end
+        html += `<div class="col"><div class="card p-3 h-100 d-flex align-items-center justify-content-center" style="border:2px dashed rgba(124,58,237,.4);background:transparent;cursor:pointer;" onclick="openAddModelModal()">
+            <i class="bi bi-plus-circle fs-2 mb-2" style="color:#7c3aed;"></i>
+            <div class="text-secondary small text-center">Add another model<br><span style="font-size:.7rem;">or custom endpoint</span></div>
+        </div></div>`;
+
         grid.innerHTML = html;
     } catch (e) {
         grid.innerHTML = '<div class="col-12"><div class="alert alert-danger">Failed to load AI models.</div></div>';
     }
 }
 
-function openAiModelModal(key, name, defaultModel, hint) {
-    document.getElementById('aiModelProviderKey').value = key;
-    document.getElementById('aiModelProviderName').textContent = name;
+function onProviderChange(val) {
+    const meta = AI_PROVIDER_META[val] || {};
+    document.getElementById('aiModelName').placeholder = meta.defaultModel || '';
+    document.getElementById('aiModelHint').textContent = meta.hint ? 'Models: ' + meta.hint : '';
+    document.getElementById('aiModelBaseUrlGroup').style.display = meta.needsBaseUrl ? 'block' : 'none';
+    const isLocal = meta.localOnly;
+    document.getElementById('aiModelApiKeyRequired').style.display = isLocal ? 'none' : 'inline';
+    document.getElementById('aiModelApiKeyGroup').style.display = 'block';
+    if (isLocal) {
+        document.getElementById('aiModelApiKey').placeholder = 'Not required for local endpoints';
+    } else {
+        document.getElementById('aiModelApiKey').placeholder = 'Paste your API key';
+    }
+}
+
+function openAddModelModal() {
+    document.getElementById('aiModelEditId').value = '';
+    document.getElementById('aiModelModalTitle').textContent = 'Add AI Model';
+    document.getElementById('aiModelProviderKey').value = '';
+    document.getElementById('aiModelDisplayName').value = '';
     document.getElementById('aiModelApiKey').value = '';
     document.getElementById('aiModelName').value = '';
-    document.getElementById('aiModelName').placeholder = defaultModel;
-    document.getElementById('aiModelHint').textContent = 'Available models: ' + hint;
     document.getElementById('aiModelBaseUrl').value = '';
-    const provider = AI_PROVIDERS.find(p => p.key === key);
-    document.getElementById('aiModelBaseUrlGroup').style.display = (provider && provider.needsBaseUrl) ? 'block' : 'none';
+    document.getElementById('aiModelBaseUrlGroup').style.display = 'none';
+    document.getElementById('aiModelHint').textContent = '';
+    document.getElementById('aiModelApiKeyRequired').style.display = 'inline';
+    document.getElementById('aiModelSaveBtn').innerHTML = '<i class="bi bi-check-lg me-1"></i>Save & Connect';
     new bootstrap.Modal(document.getElementById('aiModelModal')).show();
 }
 
-async function saveAiModel(btn) {
-    const provider  = document.getElementById('aiModelProviderKey').value;
-    const apiKey    = document.getElementById('aiModelApiKey').value.trim();
-    const modelName = document.getElementById('aiModelName').value.trim();
-    const baseUrl   = document.getElementById('aiModelBaseUrl').value.trim();
-    if (!apiKey && !['ollama'].includes(provider)) { showToast('Please enter an API key', 'warning'); return; }
+async function openEditModelModal(id) {
+    // Fetch current config
+    const data = await ajaxGet('/ai-models');
+    const cfg = (data.models || []).find(m => m.id === id);
+    if (!cfg) { showToast('Model not found', 'error'); return; }
 
+    document.getElementById('aiModelEditId').value = id;
+    document.getElementById('aiModelModalTitle').textContent = 'Edit ' + (cfg.display_name || cfg.provider);
+    document.getElementById('aiModelProviderKey').value = cfg.provider;
+    document.getElementById('aiModelDisplayName').value = cfg.display_name || '';
+    document.getElementById('aiModelApiKey').value = '';  // never pre-fill for security
+    document.getElementById('aiModelName').value = cfg.model_name || '';
+    document.getElementById('aiModelBaseUrl').value = cfg.base_url || '';
+    document.getElementById('aiModelSaveBtn').innerHTML = '<i class="bi bi-check-lg me-1"></i>Update & Test';
+
+    onProviderChange(cfg.provider);
+    new bootstrap.Modal(document.getElementById('aiModelModal')).show();
+}
+
+async function saveOrUpdateAiModel(btn) {
+    const editId      = document.getElementById('aiModelEditId').value;
+    const provider    = document.getElementById('aiModelProviderKey').value;
+    const displayName = document.getElementById('aiModelDisplayName').value.trim();
+    const apiKey      = document.getElementById('aiModelApiKey').value.trim();
+    const modelName   = document.getElementById('aiModelName').value.trim();
+    const baseUrl     = document.getElementById('aiModelBaseUrl').value.trim();
+
+    if (!editId && !provider) { showToast('Please select a provider', 'warning'); return; }
+    const meta = AI_PROVIDER_META[provider] || {};
+    if (!editId && !meta.localOnly && !apiKey) { showToast('Please enter an API key', 'warning'); return; }
+
+    const origHtml = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Connecting…';
+
     try {
-        const r = await fetch('/ai-models', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
-            body: JSON.stringify({ provider, api_key: apiKey || 'local', model_name: modelName || null, base_url: baseUrl || null }),
-        });
-        const result = await r.json();
-        if (result.connected) {
-            showToast(result.message || 'Connected!', 'success');
-        } else if (result.success) {
-            showToast(result.message || 'Saved but not verified.', 'warning');
+        let r, result;
+        if (editId) {
+            // Update existing
+            const body = { display_name: displayName || undefined, model_name: modelName || undefined, base_url: baseUrl || undefined };
+            if (apiKey) body.api_key = apiKey;
+            r = await fetch('/ai-models/' + editId, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+                body: JSON.stringify(body),
+            });
         } else {
-            showToast(result.message || 'Failed', 'error');
+            // Create new
+            r = await fetch('/ai-models', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+                body: JSON.stringify({ provider, display_name: displayName || undefined, api_key: apiKey || undefined, model_name: modelName || undefined, base_url: baseUrl || undefined }),
+            });
         }
-        if (result.success) {
+        result = await r.json();
+        if (result.connected || result.success) {
+            showToast(result.message || (result.connected ? 'Connected!' : 'Saved.'), result.connected ? 'success' : 'warning');
             bootstrap.Modal.getInstance(document.getElementById('aiModelModal')).hide();
             loadAiModels();
+        } else {
+            showToast(result.message || 'Failed', 'error');
         }
     } catch(e) {
         showToast('Request failed: ' + e.message, 'error');
     } finally {
         btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save & Connect';
+        btn.innerHTML = origHtml;
     }
 }
-async function testAiModel(provider, btn) {
+
+async function testAiModelById(id, btn) {
     const origHtml = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Testing…';
     try {
-        const r = await fetch('/ai-models/' + provider + '/test', {
+        const r = await fetch('/ai-models/' + id + '/test', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
             body: '{}',
@@ -467,10 +563,14 @@ async function testAiModel(provider, btn) {
         btn.innerHTML = origHtml;
     }
 }
-async function deleteAiModel(provider, btn) {
-    if (!confirm('Remove this AI model configuration?')) return;
-    const result = await ajaxDelete('/ai-models/' + provider, btn);
-    if (result.success) loadAiModels();
+
+async function deleteAiModelById(id, btn) {
+    if (!confirm('Remove this AI model configuration? This cannot be undone.')) return;
+    const result = await ajaxDelete('/ai-models/' + id, btn);
+    if (result && result.success) {
+        showToast('AI model removed.', 'success');
+        loadAiModels();
+    }
 }
 
 // Platform Ops
