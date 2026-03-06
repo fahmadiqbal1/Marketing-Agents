@@ -25,13 +25,25 @@ class OrchestratorService
 
     // Skill domains the orchestrator focuses on
     public const SKILL_DOMAINS = [
-        'marketing'         => 'Marketing strategy, audience targeting, funnel optimization',
+        'marketing'         => 'Marketing strategy, audience targeting, funnel optimisation',
         'copywriting'       => 'Caption writing, headlines, calls-to-action, tone',
         'designing'         => 'Visual direction, color, layout, image prompts',
         'seo'               => 'Keywords, metadata, discoverability',
         'growth'            => 'Engagement tactics, viral hooks, A/B insights',
         'agent_management'  => 'Task routing, model selection, workflow orchestration',
         'analytics'         => 'Performance interpretation, trend recognition',
+    ];
+
+    /** UI colour for each skill domain — single source of truth for both backend and frontend. */
+    public const DOMAIN_COLORS = [
+        'platform_specific' => '#f59e0b',
+        'marketing'         => '#10b981',
+        'copywriting'       => '#7c3aed',
+        'designing'         => '#ec4899',
+        'seo'               => '#0ea5e9',
+        'growth'            => '#f97316',
+        'agent_management'  => '#a78bfa',
+        'analytics'         => '#6366f1',
     ];
 
     /** Maximum characters stored per skill insight. */
@@ -262,8 +274,288 @@ PROMPT;
     }
 
     // =========================================================================
-    // ORCHESTRATOR CHAT / PLANNING
+    // SKILL TRANSFER TO SUB-AGENTS
     // =========================================================================
+
+    /**
+     * Platform-specific skill relevance map.
+     * Keys are platform names; values are arrays of skill domain + capability keywords
+     * that are most relevant to that platform's sub-agent.
+     */
+    public const PLATFORM_SKILL_MAP = [
+        'instagram' => [
+            'domains'      => ['designing', 'copywriting', 'growth'],
+            'capabilities' => [
+                'photo_editing'     => 'Photo enhancement & filter techniques for high-engagement visuals',
+                'stories'           => 'Instagram Stories creation: polls, stickers, countdowns, swipe-up CTAs',
+                'collage'           => 'Multi-photo collage and carousel layout design',
+                'reels'             => 'Short-form vertical video editing for Reels (hooks, cuts, music sync)',
+                'hashtag_strategy'  => 'Hashtag clustering and niche/micro-hashtag targeting',
+                'caption_hooks'     => 'Opening hooks and caption structures that stop the scroll',
+            ],
+        ],
+        'tiktok' => [
+            'domains'      => ['designing', 'growth', 'copywriting'],
+            'capabilities' => [
+                'trending_music'    => 'Finding and selecting trending audio/music on TikTok For You Page',
+                'video_editing'     => 'Jump-cut editing, transitions, and text-overlay techniques for viral short videos',
+                'hooks'             => 'First-3-second hook formulas proven to retain viewers',
+                'duet_stitch'       => 'Duet and Stitch strategies for riding trending content',
+                'fyp_algorithm'     => 'TikTok FYP optimisation: completion rate, replays, saves tactics',
+                'sound_sync'        => 'Beat-sync editing to match video cuts with audio beats',
+            ],
+        ],
+        'youtube' => [
+            'domains'      => ['designing', 'seo', 'copywriting'],
+            'capabilities' => [
+                'thumbnail_design'  => 'High-CTR thumbnail design: contrast, faces, bold text, emotional expression',
+                'seo_titles'        => 'YouTube SEO: keyword-rich titles, descriptions, and chapter timestamps',
+                'video_editing'     => 'Long-form video structure: hook (0-30s), value delivery, retention loops',
+                'end_screens'       => 'End-screen card placement and subscribe CTA positioning',
+                'shorts'            => 'YouTube Shorts repurposing from long-form content',
+            ],
+        ],
+        'facebook' => [
+            'domains'      => ['copywriting', 'marketing', 'growth'],
+            'capabilities' => [
+                'ad_copy'           => 'Facebook ad copywriting: attention-interest-desire-action (AIDA) structure',
+                'audience_targeting'=> 'Custom audience creation and lookalike audience strategies',
+                'video_captions'    => 'Auto-caption and subtitle optimisation for silent video viewers',
+                'group_engagement'  => 'Facebook Group posting strategies for organic community growth',
+            ],
+        ],
+        'linkedin' => [
+            'domains'      => ['copywriting', 'marketing', 'seo'],
+            'capabilities' => [
+                'thought_leadership'=> 'Long-form article structure and thought-leadership positioning',
+                'document_posts'    => 'LinkedIn carousel/document post creation for authority building',
+                'connection_hooks'  => 'Opening line formulas that generate profile visits and connection requests',
+                'seo_profile'       => 'LinkedIn profile and post keyword optimisation for discoverability',
+            ],
+        ],
+        'twitter' => [
+            'domains'      => ['copywriting', 'growth'],
+            'capabilities' => [
+                'thread_structure'  => 'Thread writing: strong opener, numbered points, call-to-action finale',
+                'engagement_bait'   => 'Ethical engagement tactics: polls, questions, hot-takes',
+                'timing'            => 'Optimal tweet timing and reply-chain engagement strategies',
+            ],
+        ],
+        'pinterest' => [
+            'domains'      => ['designing', 'seo'],
+            'capabilities' => [
+                'pin_design'        => 'Vertical pin design (2:3 ratio), typography, and color psychology',
+                'seo_keywords'      => 'Pinterest keyword research and board SEO optimisation',
+                'rich_pins'         => 'Rich Pin metadata setup for product and recipe pins',
+            ],
+        ],
+        'snapchat' => [
+            'domains'      => ['designing', 'copywriting'],
+            'capabilities' => [
+                'story_design'      => 'Ephemeral Story design with bold visuals and instant-value hooks',
+                'ar_filters'        => 'AR lens and filter strategy for brand awareness',
+                'spotlight'         => "Spotlight content optimisation for Snapchat's discovery feed",
+            ],
+        ],
+        'threads' => [
+            'domains'      => ['copywriting', 'growth'],
+            'capabilities' => [
+                'conversation_hooks'=> 'Threads post openers designed to spark replies and reposts',
+                'cross_promote'     => 'Instagram cross-promotion strategy linking Threads activity',
+            ],
+        ],
+        'google_my_business' => [
+            'domains'      => ['seo', 'marketing'],
+            'capabilities' => [
+                'local_seo'         => 'Google Maps ranking factors: review velocity, keyword-rich updates',
+                'post_formats'      => 'GMB post types: offers, events, product announcements',
+            ],
+        ],
+        'telegram' => [
+            'domains'      => ['copywriting', 'growth'],
+            'capabilities' => [
+                'bot_commands'      => 'Telegram bot command design for subscriber engagement',
+                'broadcast_copy'    => 'Broadcast message copy that drives clicks without feeling spammy',
+            ],
+        ],
+    ];
+
+    /**
+     * Determine which skills from the Orchestrator's profile are most relevant
+     * for a given platform sub-agent, using the PLATFORM_SKILL_MAP.
+     *
+     * @return array<array{title: string, description: string, domain: string, confidence: int}>
+     */
+    public function getSkillsForAgent(string $platform): array
+    {
+        $platformKey = strtolower(str_replace([' ', '-'], '_', $platform));
+        $platformDef = self::PLATFORM_SKILL_MAP[$platformKey] ?? null;
+
+        // Always include platform-specific built-in capabilities
+        $capabilities = [];
+        if ($platformDef) {
+            foreach ($platformDef['capabilities'] as $capKey => $capDesc) {
+                $capabilities[] = [
+                    'title'       => $capKey,
+                    'description' => $capDesc,
+                    'domain'      => 'platform_specific',
+                    'confidence'  => 85,
+                    'source'      => 'orchestrator_map',
+                ];
+            }
+        }
+
+        // Layer in learned skill-log insights that match the platform's relevant domains
+        $relevantDomains = $platformDef['domains'] ?? array_keys(self::SKILL_DOMAINS);
+        try {
+            $rows = \DB::table('orchestrator_skill_logs')
+                ->where('business_id', $this->businessId)
+                ->whereIn('skill_domain', $relevantDomains)
+                ->orderByDesc('confidence')
+                ->orderByDesc('created_at')
+                ->limit(20)
+                ->get();
+
+            foreach ($rows as $row) {
+                // Generate a descriptive title from the first ~50 chars of the insight text
+                $shortTitle = rtrim(substr(preg_replace('/\s+/', ' ', $row->insight), 0, 50));
+                if (strlen($row->insight) > 50) {
+                    $shortTitle .= '…';
+                }
+                $capabilities[] = [
+                    'title'       => $row->skill_domain . ': ' . $shortTitle,
+                    'description' => $row->insight,
+                    'domain'      => $row->skill_domain,
+                    'confidence'  => $row->confidence,
+                    'source'      => $row->source_provider ?? 'orchestrator',
+                ];
+            }
+        } catch (\Exception $e) {
+            Log::warning('OrchestratorService::getSkillsForAgent failed to load skill logs', ['error' => $e->getMessage()]);
+        }
+
+        return $capabilities;
+    }
+
+    /**
+     * Transfer (inject) relevant Orchestrator skills into the given platform sub-agent.
+     * Merges new skills with any existing injected_skills; deduplicates by title.
+     *
+     * @return array{success: bool, platform: string, skills_injected: int, message: string}
+     */
+    public function transferSkillsToAgent(string $platform): array
+    {
+        $skills = $this->getSkillsForAgent($platform);
+
+        if (empty($skills)) {
+            return [
+                'success'         => false,
+                'platform'        => $platform,
+                'skills_injected' => 0,
+                'message'         => "No skills available to transfer to the {$platform} agent.",
+            ];
+        }
+
+        try {
+            $agent = \App\Models\PlatformAgent::firstOrCreate(
+                ['business_id' => $this->businessId, 'platform' => $platform],
+                ['is_active' => true, 'agent_type' => 'social']
+            );
+
+            // Merge and deduplicate by title
+            $existing  = $agent->injected_skills ?? [];
+            $existingTitles = array_flip(array_column($existing, 'title'));
+            $added     = 0;
+            foreach ($skills as $skill) {
+                if (! isset($existingTitles[$skill['title']])) {
+                    $existing[] = $skill;
+                    $added++;
+                }
+            }
+
+            $agent->update([
+                'injected_skills' => $existing,
+                'last_learned_at' => now(),
+            ]);
+
+            // Log this as an orchestrator skill-management action
+            $this->learnSkill(
+                'agent_management',
+                "Transferred {$added} skills to {$platform} agent",
+                'orchestrator',
+                80
+            );
+
+            return [
+                'success'         => true,
+                'platform'        => $platform,
+                'skills_injected' => $added,
+                'total_skills'    => count($existing),
+                'message'         => "Successfully injected {$added} new skill(s) into the {$platform} agent. Total: " . count($existing) . " capabilities.",
+            ];
+        } catch (\Exception $e) {
+            Log::error('OrchestratorService::transferSkillsToAgent failed', [
+                'platform' => $platform,
+                'error'    => $e->getMessage(),
+            ]);
+            return [
+                'success'         => false,
+                'platform'        => $platform,
+                'skills_injected' => 0,
+                'message'         => 'Transfer failed: ' . $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Transfer skills to ALL known platforms in one go.
+     *
+     * @return array<string, array>
+     */
+    public function transferSkillsToAllAgents(): array
+    {
+        $results = [];
+        foreach (array_keys(self::PLATFORM_SKILL_MAP) as $platform) {
+            $results[$platform] = $this->transferSkillsToAgent($platform);
+        }
+        return $results;
+    }
+
+    /**
+     * Clear all injected skills from a given agent (reset).
+     */
+    public function clearAgentSkills(string $platform): bool
+    {
+        try {
+            \App\Models\PlatformAgent::where('business_id', $this->businessId)
+                ->where('platform', $platform)
+                ->update(['injected_skills' => null]);
+            return true;
+        } catch (\Exception $e) {
+            Log::warning('OrchestratorService::clearAgentSkills failed', ['error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    /**
+     * Get a summary of how many skills each agent currently holds.
+     *
+     * @return array<string, int>
+     */
+    public function getAgentSkillCounts(): array
+    {
+        try {
+            $agents = \App\Models\PlatformAgent::where('business_id', $this->businessId)
+                ->get(['platform', 'injected_skills']);
+            $counts = [];
+            foreach ($agents as $agent) {
+                $counts[$agent->platform] = count($agent->injected_skills ?? []);
+            }
+            return $counts;
+        } catch (\Exception $e) {
+            return [];
+        }
+    }
 
     /**
      * Ask the orchestrator to plan tasks for a given marketing goal.
@@ -447,8 +739,9 @@ PROMPT;
             ->where('last_test_status', 'ok')
             ->count();
 
-        $skillProfile = $this->getSkillProfile();
-        $totalInsights = array_sum(array_column($skillProfile, 'insight_count'));
+        $skillProfile    = $this->getSkillProfile();
+        $totalInsights   = array_sum(array_column($skillProfile, 'insight_count'));
+        $agentSkillCounts = $this->getAgentSkillCounts();
 
         return [
             'has_orchestrator'        => $orchestratorModel !== null,
@@ -462,6 +755,8 @@ PROMPT;
             'skill_domains'           => array_keys(self::SKILL_DOMAINS),
             'skill_profile'           => $skillProfile,
             'capabilities_map'        => $this->getModelCapabilitiesMap(),
+            'agent_skill_counts'      => $agentSkillCounts,
+            'platform_skill_map'      => self::PLATFORM_SKILL_MAP,
         ];
     }
 }

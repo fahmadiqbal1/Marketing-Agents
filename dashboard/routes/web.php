@@ -55,6 +55,12 @@ Route::middleware(['auth'])->group(function () {
     Route::post('/orchestrator/plan',     [DashboardController::class, 'orchestratorPlan'])->name('dashboard.orchestrator.plan');
     Route::get('/orchestrator/skills',    [DashboardController::class, 'orchestratorSkills'])->name('dashboard.orchestrator.skills');
 
+    // Orchestrator → Sub-agent skill transfer
+    Route::post('/orchestrator/transfer',             [DashboardController::class, 'transferSkillsToAgent'])->name('dashboard.orchestrator.transfer');
+    Route::post('/orchestrator/transfer-all',         [DashboardController::class, 'transferSkillsToAllAgents'])->name('dashboard.orchestrator.transfer-all');
+    Route::get('/orchestrator/agents/{platform}/skills',   [DashboardController::class, 'getAgentInjectedSkills'])->name('dashboard.orchestrator.agent-skills');
+    Route::delete('/orchestrator/agents/{platform}/skills',[DashboardController::class, 'clearAgentSkills'])->name('dashboard.orchestrator.agent-skills.clear');
+
     // Strategy, Settings, Calendar
     Route::get('/strategy', [DashboardController::class, 'strategy'])->name('dashboard.strategy');
     Route::get('/settings',  [DashboardController::class, 'settings'])->name('dashboard.settings');

@@ -111,6 +111,59 @@
     </div>
 </div>
 
+{{-- Agent Skill Preview Modal --}}
+<div class="modal fade" id="agentSkillModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content bg-dark border-secondary">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title"><i class="bi bi-lightning-charge-fill me-2" style="color:#f59e0b;"></i>Skills for <span id="agentSkillModalTitle"></span> Agent</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="agentSkillModalBody">
+                <div class="text-center py-4"><span class="spinner-border text-warning"></span></div>
+            </div>
+            <div class="modal-footer border-secondary justify-content-between">
+                <button type="button" class="btn btn-outline-danger btn-sm" id="agentSkillClearBtn" onclick="clearAgentSkills()">
+                    <i class="bi bi-trash me-1"></i>Clear All Skills
+                </button>
+                <div>
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-sm ms-2" style="background:#7c3aed;color:#fff;" id="agentSkillTransferBtn" onclick="transferToCurrentAgent()">
+                        <i class="bi bi-arrow-down-circle me-1"></i>Inject Skills
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{-- ── Knowledge Transfer Panel ──────────────────── --}}
+<div class="card mb-4" style="border:1px solid rgba(245,158,11,.2);">
+    <div class="card-body p-4">
+        <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+            <div class="rounded-3 d-flex align-items-center justify-content-center flex-shrink-0"
+                 style="width:48px;height:48px;background:rgba(245,158,11,.15);">
+                <i class="bi bi-arrow-down-circle-fill fs-3" style="color:#f59e0b;"></i>
+            </div>
+            <div class="flex-grow-1">
+                <h6 class="text-white mb-0">Knowledge Transfer</h6>
+                <p class="text-secondary small mb-0">Push selected Orchestrator capabilities into each platform sub-agent so they know <em>what to do</em> for their specific channel</p>
+            </div>
+            <button class="btn btn-sm" style="background:#f59e0b;color:#000;font-weight:600;" onclick="transferAllSkills(this)">
+                <i class="bi bi-lightning-charge-fill me-1"></i>Transfer All
+            </button>
+        </div>
+
+        <div class="row row-cols-2 row-cols-sm-3 row-cols-xl-4 g-2" id="agentTransferGrid">
+            <div class="col-12 text-secondary small py-2">
+                <span class="spinner-border spinner-border-sm me-2"></span>Loading agent skill status…
+            </div>
+        </div>
+
+        <div id="transferAllResult" class="mt-3 d-none"></div>
+    </div>
+</div>
+
 {{-- ── Summary Stats ────────────────────── --}}
 <div class="row row-cols-2 row-cols-xl-4 g-3 mb-4">
     <div class="col">
@@ -149,34 +202,49 @@
 
     @php
     $platformAgents = [
-        ['name' => 'Instagram Agent', 'icon' => 'bi-instagram', 'color' => '#e1306c', 'desc' => 'Crafts reels captions, stories, and carousel posts optimised for Instagram algorithm.'],
-        ['name' => 'Facebook Agent', 'icon' => 'bi-facebook', 'color' => '#1877f2', 'desc' => 'Creates engaging posts, events, and ad copy tailored to Facebook audiences.'],
-        ['name' => 'YouTube Agent', 'icon' => 'bi-youtube', 'color' => '#ff0000', 'desc' => 'Writes video titles, descriptions, tags, and community post scripts.'],
-        ['name' => 'LinkedIn Agent', 'icon' => 'bi-linkedin', 'color' => '#0a66c2', 'desc' => 'Produces professional articles, thought-leadership posts, and job updates.'],
-        ['name' => 'TikTok Agent', 'icon' => 'bi-tiktok', 'color' => '#ffffff', 'desc' => 'Generates trending hooks, captions, and hashtag strategies for short-form video.'],
-        ['name' => 'Twitter / X Agent', 'icon' => 'bi-twitter-x', 'color' => '#ffffff', 'desc' => 'Writes threads, tweet copy, and reply suggestions optimised for engagement.'],
-        ['name' => 'Pinterest Agent', 'icon' => 'bi-pinterest', 'color' => '#e60023', 'desc' => 'Creates pin titles, board descriptions, and keyword-rich captions.'],
-        ['name' => 'Snapchat Agent', 'icon' => 'bi-snapchat', 'color' => '#fffc00', 'desc' => 'Designs story scripts and spotlight captions for the Snapchat audience.'],
-        ['name' => 'Threads Agent', 'icon' => 'bi-threads', 'color' => '#ffffff', 'desc' => 'Generates conversation-starting posts for Meta Threads platform.'],
-        ['name' => 'Google My Business Agent', 'icon' => 'bi-geo-alt-fill', 'color' => '#00d4ff', 'desc' => 'Writes local business posts, updates, and event listings for Google Maps.'],
-        ['name' => 'Telegram Bot Agent', 'icon' => 'bi-telegram', 'color' => '#0088cc', 'desc' => 'Manages your Telegram bot, approves posts, and responds to commands.'],
+        ['name' => 'Instagram Agent',       'key' => 'instagram',        'icon' => 'bi-instagram',     'color' => '#e1306c', 'desc' => 'Crafts reels captions, stories, and carousel posts optimised for Instagram algorithm.'],
+        ['name' => 'Facebook Agent',        'key' => 'facebook',         'icon' => 'bi-facebook',      'color' => '#1877f2', 'desc' => 'Creates engaging posts, events, and ad copy tailored to Facebook audiences.'],
+        ['name' => 'YouTube Agent',         'key' => 'youtube',          'icon' => 'bi-youtube',       'color' => '#ff0000', 'desc' => 'Writes video titles, descriptions, tags, and community post scripts.'],
+        ['name' => 'LinkedIn Agent',        'key' => 'linkedin',         'icon' => 'bi-linkedin',      'color' => '#0a66c2', 'desc' => 'Produces professional articles, thought-leadership posts, and job updates.'],
+        ['name' => 'TikTok Agent',          'key' => 'tiktok',           'icon' => 'bi-tiktok',        'color' => '#ffffff', 'desc' => 'Generates trending hooks, captions, and hashtag strategies for short-form video.'],
+        ['name' => 'Twitter / X Agent',     'key' => 'twitter',          'icon' => 'bi-twitter-x',     'color' => '#ffffff', 'desc' => 'Writes threads, tweet copy, and reply suggestions optimised for engagement.'],
+        ['name' => 'Pinterest Agent',       'key' => 'pinterest',        'icon' => 'bi-pinterest',     'color' => '#e60023', 'desc' => 'Creates pin titles, board descriptions, and keyword-rich captions.'],
+        ['name' => 'Snapchat Agent',        'key' => 'snapchat',         'icon' => 'bi-snapchat',      'color' => '#fffc00', 'desc' => 'Designs story scripts and spotlight captions for the Snapchat audience.'],
+        ['name' => 'Threads Agent',         'key' => 'threads',          'icon' => 'bi-threads',       'color' => '#ffffff', 'desc' => 'Generates conversation-starting posts for Meta Threads platform.'],
+        ['name' => 'Google My Business',    'key' => 'google_my_business','icon' => 'bi-geo-alt-fill', 'color' => '#00d4ff', 'desc' => 'Writes local business posts, updates, and event listings for Google Maps.'],
+        ['name' => 'Telegram Bot Agent',    'key' => 'telegram',         'icon' => 'bi-telegram',      'color' => '#0088cc', 'desc' => 'Manages your Telegram bot, approves posts, and responds to commands.'],
     ];
     @endphp
 
     @foreach($platformAgents as $agent)
     <div class="col">
-        <div class="card p-3 h-100">
+        <div class="card p-3 h-100 d-flex flex-column">
             <div class="d-flex align-items-center gap-3 mb-2">
                 <div class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0"
                      style="width:42px;height:42px;background:rgba(255,255,255,0.07);">
                     <i class="bi {{ $agent['icon'] }} fs-5" style="color:{{ $agent['color'] }}"></i>
                 </div>
-                <div>
+                <div class="flex-grow-1">
                     <div class="fw-semibold small">{{ $agent['name'] }}</div>
-                    <span class="badge bg-success" style="font-size:.65rem;">Active</span>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-success" style="font-size:.65rem;">Active</span>
+                        <span class="badge bg-secondary skill-count-badge" id="skill-count-{{ $agent['key'] }}" style="font-size:.65rem;">0 skills</span>
+                    </div>
                 </div>
             </div>
-            <p class="text-secondary small mb-0" style="line-height:1.5;">{{ $agent['desc'] }}</p>
+            <p class="text-secondary small flex-grow-1" style="line-height:1.5;">{{ $agent['desc'] }}</p>
+            <div class="d-flex gap-1 mt-2 pt-2" style="border-top:1px solid rgba(255,255,255,.07);">
+                <button class="btn btn-outline-warning btn-sm flex-grow-1"
+                        onclick="transferToAgent('{{ $agent['key'] }}', this)"
+                        title="Inject Orchestrator capabilities into this agent">
+                    <i class="bi bi-arrow-down-circle me-1"></i>Transfer Skills
+                </button>
+                <button class="btn btn-outline-secondary btn-sm"
+                        onclick="viewAgentSkills('{{ $agent['key'] }}', '{{ $agent['name'] }}')"
+                        title="View skills injected into this agent">
+                    <i class="bi bi-eye"></i>
+                </button>
+            </div>
         </div>
     </div>
     @endforeach
@@ -273,6 +341,9 @@
 
 @push('scripts')
 <script>
+// Domain colours — sourced from OrchestratorService::DOMAIN_COLORS (single source of truth)
+const DOMAIN_COLORS = @json(\App\Services\OrchestratorService::DOMAIN_COLORS);
+
 // ── Orchestrator ──────────────────────────────────────────────────
 async function loadOrchestrator() {
     try {
@@ -446,6 +517,213 @@ async function trainFromRepo(btn) {
     btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> Train';
 }
 
-document.addEventListener('DOMContentLoaded', loadOrchestrator);
+// ── Knowledge Transfer ──────────────────────────────────────────
+let _currentTransferPlatform = null;
+let _currentTransferAgentName = null;
+
+/** Load the transfer grid showing skill counts per agent */
+async function loadAgentSkillCounts() {
+    try {
+        const data = await ajaxGet('/orchestrator');
+        const counts = data.orchestrator?.agent_skill_counts || {};
+        for (const [platform, count] of Object.entries(counts)) {
+            const el = document.getElementById('skill-count-' + platform);
+            if (el) {
+                el.textContent = count + ' skill' + (count !== 1 ? 's' : '');
+                el.className = count > 0
+                    ? 'badge bg-warning text-dark skill-count-badge'
+                    : 'badge bg-secondary skill-count-badge';
+                el.style.fontSize = '.65rem';
+            }
+        }
+        renderTransferGrid(counts);
+    } catch(e) {
+        console.warn('Could not load agent skill counts', e);
+    }
+}
+
+function renderTransferGrid(counts) {
+    const grid = document.getElementById('agentTransferGrid');
+    if (!grid) return;
+
+    const platforms = [
+        { key: 'instagram',        name: 'Instagram',    icon: 'bi-instagram',     color: '#e1306c' },
+        { key: 'tiktok',           name: 'TikTok',       icon: 'bi-tiktok',        color: '#ffffff' },
+        { key: 'youtube',          name: 'YouTube',      icon: 'bi-youtube',       color: '#ff0000' },
+        { key: 'facebook',         name: 'Facebook',     icon: 'bi-facebook',      color: '#1877f2' },
+        { key: 'linkedin',         name: 'LinkedIn',     icon: 'bi-linkedin',      color: '#0a66c2' },
+        { key: 'twitter',          name: 'Twitter / X',  icon: 'bi-twitter-x',     color: '#ffffff' },
+        { key: 'pinterest',        name: 'Pinterest',    icon: 'bi-pinterest',     color: '#e60023' },
+        { key: 'snapchat',         name: 'Snapchat',     icon: 'bi-snapchat',      color: '#fffc00' },
+        { key: 'threads',          name: 'Threads',      icon: 'bi-threads',       color: '#ffffff' },
+        { key: 'google_my_business', name: 'Google My Biz', icon: 'bi-geo-alt-fill', color: '#00d4ff' },
+        { key: 'telegram',         name: 'Telegram',     icon: 'bi-telegram',      color: '#0088cc' },
+    ];
+
+    let html = '';
+    for (const p of platforms) {
+        const count = counts[p.key] ?? 0;
+        const badgeCls = count > 0 ? 'bg-warning text-dark' : 'bg-secondary';
+        html += `<div class="col">
+            <div class="rounded-3 p-2 d-flex flex-column align-items-center gap-1 text-center"
+                 style="background:rgba(255,255,255,.04);cursor:pointer;"
+                 onclick="transferToAgent('${p.key}', this)">
+                <i class="bi ${p.icon} fs-5" style="color:${p.color};"></i>
+                <div class="text-white" style="font-size:.7rem;line-height:1.2;">${p.name}</div>
+                <span class="badge ${badgeCls}" style="font-size:.6rem;" id="grid-count-${p.key}">${count} skill${count !== 1 ? 's' : ''}</span>
+            </div>
+        </div>`;
+    }
+    grid.innerHTML = html;
+}
+
+async function transferToAgent(platform, btn) {
+    const origHtml = btn ? btn.innerHTML : null;
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+    try {
+        const r = await fetch('/orchestrator/transfer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify({ platform }),
+        });
+        const result = await r.json();
+        showToast(result.message || (result.success ? 'Skills transferred!' : 'Transfer failed'), result.success ? 'success' : 'error');
+        if (result.success) {
+            loadAgentSkillCounts();
+        }
+    } catch(e) {
+        showToast('Transfer failed: ' + e.message, 'error');
+    } finally {
+        if (btn) { btn.disabled = false; if (origHtml) btn.innerHTML = origHtml; }
+    }
+}
+
+async function transferAllSkills(btn) {
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Transferring…';
+    const resultEl = document.getElementById('transferAllResult');
+    resultEl.classList.remove('d-none');
+    resultEl.innerHTML = '<div class="text-secondary small"><span class="spinner-border spinner-border-sm me-2"></span>Transferring skills to all agents…</div>';
+    try {
+        const r = await fetch('/orchestrator/transfer-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: '{}',
+        });
+        const result = await r.json();
+        if (result.success) {
+            const rows = Object.entries(result.results || {})
+                .map(([p, r]) => `<span class="badge bg-secondary me-1">${p}: +${r.skills_injected}</span>`)
+                .join('');
+            resultEl.innerHTML = `<div class="alert py-2 mb-0" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);">
+                <i class="bi bi-check-circle-fill text-warning me-2"></i>
+                <strong>${result.message}</strong><br>
+                <div class="mt-2">${rows}</div>
+            </div>`;
+            loadAgentSkillCounts();
+        } else {
+            resultEl.innerHTML = `<div class="alert alert-danger py-2 mb-0 small">${result.message || 'Transfer failed'}</div>`;
+        }
+    } catch(e) {
+        resultEl.innerHTML = `<div class="alert alert-danger py-2 mb-0 small">Error: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+    }
+}
+
+async function viewAgentSkills(platform, name) {
+    _currentTransferPlatform = platform;
+    _currentTransferAgentName = name;
+    document.getElementById('agentSkillModalTitle').textContent = name;
+    document.getElementById('agentSkillModalBody').innerHTML = '<div class="text-center py-4"><span class="spinner-border text-warning"></span></div>';
+    new bootstrap.Modal(document.getElementById('agentSkillModal')).show();
+
+    try {
+        const data = await ajaxGet('/orchestrator/agents/' + platform + '/skills');
+        const injected  = data.injected_skills || [];
+        const available = data.available_skills || [];
+
+        let html = '';
+
+        if (injected.length > 0) {
+            html += `<h6 class="text-warning mb-2"><i class="bi bi-check-circle-fill me-2"></i>Injected (${injected.length})</h6>`;
+            html += '<div class="row g-2 mb-3">';
+            for (const s of injected) {
+                const domainColor = DOMAIN_COLORS[s.domain] || '#aaa';
+                html += `<div class="col-12 col-md-6">
+                    <div class="rounded p-2" style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <div class="fw-semibold small text-white">${s.title}</div>
+                            <span class="badge" style="background:${domainColor}22;color:${domainColor};font-size:.6rem;white-space:nowrap;">${s.domain}</span>
+                        </div>
+                        <div class="text-secondary mt-1" style="font-size:.72rem;">${s.description}</div>
+                        <div class="text-secondary mt-1" style="font-size:.65rem;">Confidence: ${s.confidence}%</div>
+                    </div>
+                </div>`;
+            }
+            html += '</div>';
+        } else {
+            html += `<div class="alert alert-secondary small py-2 mb-3">
+                No skills injected yet. Click <strong>Inject Skills</strong> to push Orchestrator knowledge into this agent.
+            </div>`;
+        }
+
+        if (available.length > injected.length) {
+            const pending = available.filter(a => !injected.some(i => i.title === a.title));
+            if (pending.length > 0) {
+                html += `<h6 class="text-secondary mb-2"><i class="bi bi-clock-history me-2"></i>Available to inject (${pending.length})</h6>`;
+                html += '<div class="row g-2">';
+                for (const s of pending.slice(0, 8)) {
+                    html += `<div class="col-12 col-md-6">
+                        <div class="rounded p-2" style="background:rgba(255,255,255,.04);">
+                            <div class="fw-semibold small text-secondary">${s.title}</div>
+                            <div class="text-secondary mt-1" style="font-size:.72rem;">${s.description}</div>
+                        </div>
+                    </div>`;
+                }
+                if (pending.length > 8) html += `<div class="col-12 text-secondary small">…and ${pending.length - 8} more</div>`;
+                html += '</div>';
+            }
+        }
+
+        document.getElementById('agentSkillModalBody').innerHTML = html;
+    } catch(e) {
+        document.getElementById('agentSkillModalBody').innerHTML = `<div class="alert alert-danger small">${e.message}</div>`;
+    }
+}
+
+async function transferToCurrentAgent() {
+    if (!_currentTransferPlatform) return;
+    const btn = document.getElementById('agentSkillTransferBtn');
+    await transferToAgent(_currentTransferPlatform, btn);
+    // Refresh modal content using the stored agent name
+    await viewAgentSkills(_currentTransferPlatform, _currentTransferAgentName);
+}
+
+async function clearAgentSkills() {
+    if (!_currentTransferPlatform) return;
+    if (!confirm('Clear all injected skills from this agent?')) return;
+    try {
+        const r = await fetch('/orchestrator/agents/' + _currentTransferPlatform + '/skills', {
+            method: 'DELETE',
+            headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+        });
+        const result = await r.json();
+        showToast(result.message || 'Cleared', result.success ? 'success' : 'error');
+        if (result.success) {
+            await viewAgentSkills(_currentTransferPlatform, _currentTransferAgentName);
+            loadAgentSkillCounts();
+        }
+    } catch(e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadOrchestrator();
+    loadAgentSkillCounts();
+});
 </script>
 @endpush

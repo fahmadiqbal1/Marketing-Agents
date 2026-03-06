@@ -633,6 +633,67 @@ class DashboardController extends Controller
         return response()->json(['success' => true, 'skills' => $profile, 'domains' => \App\Services\OrchestratorService::SKILL_DOMAINS]);
     }
 
+    /**
+     * Transfer orchestrator skills to a specific platform sub-agent.
+     */
+    public function transferSkillsToAgent(Request $request)
+    {
+        $request->validate(['platform' => 'required|string|max:50']);
+        $svc    = new \App\Services\OrchestratorService($this->businessId());
+        $result = $svc->transferSkillsToAgent($request->input('platform'));
+        return response()->json($result);
+    }
+
+    /**
+     * Transfer orchestrator skills to ALL platform sub-agents.
+     */
+    public function transferSkillsToAllAgents()
+    {
+        $svc     = new \App\Services\OrchestratorService($this->businessId());
+        $results = $svc->transferSkillsToAllAgents();
+        $total   = array_sum(array_column($results, 'skills_injected'));
+        return response()->json([
+            'success' => true,
+            'results' => $results,
+            'total_injected' => $total,
+            'message' => "Transferred skills to " . count($results) . " agents ({$total} new skills total).",
+        ]);
+    }
+
+    /**
+     * Get the skills currently held by a specific platform agent.
+     */
+    public function getAgentInjectedSkills(Request $request, string $platform)
+    {
+        $agent = \App\Models\PlatformAgent::where('business_id', $this->businessId())
+            ->where('platform', $platform)
+            ->first();
+
+        $skills = $agent ? ($agent->injected_skills ?? []) : [];
+        $preview = (new \App\Services\OrchestratorService($this->businessId()))->getSkillsForAgent($platform);
+
+        return response()->json([
+            'success'          => true,
+            'platform'         => $platform,
+            'injected_skills'  => $skills,
+            'total_injected'   => count($skills),
+            'available_skills' => $preview,
+        ]);
+    }
+
+    /**
+     * Clear all injected skills from a specific platform agent.
+     */
+    public function clearAgentSkills(Request $request, string $platform)
+    {
+        $svc = new \App\Services\OrchestratorService($this->businessId());
+        $ok  = $svc->clearAgentSkills($platform);
+        return response()->json([
+            'success' => $ok,
+            'message' => $ok ? "Skills cleared from {$platform} agent." : 'Failed to clear skills.',
+        ]);
+    }
+
     public function listBusinesses()
     {
         // Try junction table first, fall back to owner_id

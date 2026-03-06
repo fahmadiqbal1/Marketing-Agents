@@ -907,6 +907,45 @@ Route::middleware('auth:sanctum')->group(function () {
         return response()->json(['success' => true, 'skills' => $profile, 'domains' => \App\Services\OrchestratorService::SKILL_DOMAINS]);
     })->name('api.orchestrator.skills');
 
+    Route::post('/orchestrator/transfer', function (Request $request) {
+        $request->validate(['platform' => 'required|string|max:50']);
+        $svc    = new \App\Services\OrchestratorService($request->user()->business_id);
+        $result = $svc->transferSkillsToAgent($request->input('platform'));
+        return response()->json($result);
+    })->name('api.orchestrator.transfer');
+
+    Route::post('/orchestrator/transfer-all', function (Request $request) {
+        $svc     = new \App\Services\OrchestratorService($request->user()->business_id);
+        $results = $svc->transferSkillsToAllAgents();
+        $total   = array_sum(array_column($results, 'skills_injected'));
+        return response()->json([
+            'success'        => true,
+            'results'        => $results,
+            'total_injected' => $total,
+            'message'        => "Transferred skills to " . count($results) . " agents ({$total} new skills total).",
+        ]);
+    })->name('api.orchestrator.transfer-all');
+
+    Route::get('/orchestrator/agents/{platform}/skills', function (Request $request, string $platform) {
+        $bid   = $request->user()->business_id;
+        $agent = \App\Models\PlatformAgent::where('business_id', $bid)->where('platform', $platform)->first();
+        $skills  = $agent ? ($agent->injected_skills ?? []) : [];
+        $preview = (new \App\Services\OrchestratorService($bid))->getSkillsForAgent($platform);
+        return response()->json([
+            'success'          => true,
+            'platform'         => $platform,
+            'injected_skills'  => $skills,
+            'total_injected'   => count($skills),
+            'available_skills' => $preview,
+        ]);
+    })->name('api.orchestrator.agent-skills');
+
+    Route::delete('/orchestrator/agents/{platform}/skills', function (Request $request, string $platform) {
+        $svc = new \App\Services\OrchestratorService($request->user()->business_id);
+        $ok  = $svc->clearAgentSkills($platform);
+        return response()->json(['success' => $ok, 'message' => $ok ? "Skills cleared from {$platform} agent." : 'Failed.']);
+    })->name('api.orchestrator.agent-skills.clear');
+
     // ─────────────────────────────────────────────────────────────────────
     // BUSINESS PROFILE
     // ─────────────────────────────────────────────────────────────────────
